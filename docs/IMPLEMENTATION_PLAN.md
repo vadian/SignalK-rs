@@ -788,6 +788,8 @@ fn main() -> Result<()> {
 - [ ] Policy implementation (instant/ideal/fixed)
 - [ ] Period/minPeriod throttling
 - [ ] Delta cache for `sendCachedValues=true`
+- [ ] Sources hierarchy population (build `/sources` tree from deltas)
+- [ ] Multiple value storage (store all sources per path in `.values` map)
 
 ### Phase 4: ESP32 Port (Parallel Track)
 - [ ] `signalk-server`: Add `esp-idf-runtime` feature
@@ -819,11 +821,12 @@ fn main() -> Result<()> {
 - [ ] Source priority system
 
 ### Phase 8: Production Hardening
-- [ ] REST API (axum on Linux, esp-idf-http on ESP32)
+- [ ] REST API GET/PUT endpoints (`/signalk/v1/api/*`)
 - [ ] HTTP routes for plugins (`registerWithRouter`)
 - [ ] Security/authentication (JWT)
 - [ ] Configuration file support (compatible with TS implementation)
 - [ ] mDNS discovery
+- [ ] Notifications system (`notifications.*` paths, alarm state machine)
 - [ ] Systemd service integration
 - [ ] Documentation and examples
 
@@ -891,21 +894,11 @@ fn main() -> Result<()> {
 
 ## 10. Next Steps
 
-1. **Create new repository** - `signalk-server-rs` with clean structure
-2. **Phase 1 implementation** - Data model, delta parsing, basic tests
-3. **Phase 2 implementation** - WebSocket server, hello message, broadcasting
-4. **Validate against spec** - Use SignalK compliance test suite
-5. **Phase 4 implementation** - Deno bridge prototype
-
----
-
-## 11. Open Questions
-
-1. **Deno integration approach:** Subprocess (simpler) vs `deno_core` embedding (tighter)?
-2. **BaconJS compatibility:** Provide shim or require migration to callbacks?
-3. **Security:** Authentication required for initial version?
-4. **Multiple vessels:** Support AIS targets or self-only initially?
-5. **Config format:** YAML (like original) or TOML (Rust ecosystem)?
+1. **Complete Phase 3** - Subscription policies, period throttling, delta cache
+2. **Phase 4** - ESP32 port with basic WebSocket server
+3. **Phase 5-6** - Deno plugin bridge and API implementation
+4. **Phase 7** - NMEA providers for real data input
+5. **Phase 8-9** - REST API and Admin UI
 
 ---
 

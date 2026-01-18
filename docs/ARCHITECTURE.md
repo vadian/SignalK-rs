@@ -68,36 +68,44 @@ signalk-rs/
 **Purpose:** WebSocket server handling connections and subscriptions.
 
 **Key Types:**
-- `SignalKServer` - Main server struct
+- `SignalKServer` - Main server struct (currently bypassed in favor of direct Axum integration)
 - `ServerConfig` - Server configuration
 - `ServerEvent` - Events for injecting data (from providers)
-- `SubscriptionManager` - Per-client subscription state
-- `ClientSubscription` - Individual subscription with path pattern
+- `SubscriptionManager` - Per-client subscription state (planned)
+- `ClientSubscription` - Individual subscription with path pattern (planned)
+
+**Current Architecture (Linux):**
+The Linux implementation uses a unified Axum server on a single port (3001) that handles:
+- WebSocket connections at `/signalk/v1/stream`
+- REST API at `/signalk/v1/api`
+- Admin UI at `/admin/`
+- Discovery at `/signalk`
 
 **Connection Flow:**
 1. Client connects via WebSocket
 2. Server sends `HelloMessage`
-3. Client optionally sends `SubscribeRequest`
+3. Client optionally sends `SubscribeRequest` (planned)
 4. Server filters and broadcasts deltas based on subscriptions
-5. Client can send `PutRequest` for actions
+5. Client can send `PutRequest` for actions (planned)
 
 **Threading Model:**
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    SignalKServer                         │
+│                   Unified Axum Server (Port 3001)        │
 │                                                          │
 │  ┌──────────────┐    broadcast::channel    ┌──────────┐ │
-│  │ Event Loop   │ ──────────────────────── │ Client 1 │ │
+│  │ Event Loop   │ ──────────────────────── │ WS Client│ │
 │  │              │                          └──────────┘ │
 │  │ - Apply delta│    (Delta broadcast)     ┌──────────┐ │
-│  │ - Update store│ ─────────────────────── │ Client 2 │ │
+│  │ - Update store│ ─────────────────────── │ WS Client│ │
 │  └──────────────┘                          └──────────┘ │
-│         ▲                                               │
-│         │ mpsc::channel                                 │
-│         │ (ServerEvent)                                 │
-│  ┌──────┴───────┐                                       │
-│  │   Providers  │                                       │
-│  └──────────────┘                                       │
+│         ▲                                      │         │
+│         │ mpsc::channel                        │         │
+│         │ (ServerEvent)                        │         │
+│  ┌──────┴───────┐                    ┌────────┴──────┐  │
+│  │   Providers  │                    │  REST API     │  │
+│  │   (Demo)     │                    │  /admin/ UI   │  │
+│  └──────────────┘                    └───────────────┘  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -326,28 +334,6 @@ cargo test -p signalk-server --test integration_test
 - Memory: <50MB base, scales with data
 - Connections: 100+ concurrent clients
 
-## Implementation Status
+## Implementation Roadmap
 
-See [RESEARCH_PLAN.md](./RESEARCH_PLAN.md) for detailed phase tracking.
-
-**Test Summary:** 33 tests passing across all crates.
-
-### Completed
-- [x] Core data model (signalk-core) - 12 unit tests
-- [x] Protocol messages (signalk-protocol) - 9 unit tests
-- [x] WebSocket server (signalk-server) - 4 unit tests
-- [x] Integration tests (signalk-server) - 6 tests
-- [x] Subscription filtering
-- [x] Path pattern matching with wildcards
-- [x] Statistics collection (signalk-web) - 2 unit tests
-
-### In Progress
-- [ ] REST API endpoints (signalk-web) - stubs complete
-- [ ] Admin UI static serving
-- [ ] Subscription policies (instant/ideal/fixed)
-- [ ] Period/minPeriod throttling
-
-### Planned
-- [ ] Deno plugin runtime
-- [ ] NMEA providers
-- [ ] ESP32 port
+See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) for detailed phase tracking and specification details.

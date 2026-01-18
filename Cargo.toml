@@ -41,7 +41,7 @@ tokio-tungstenite = "0.21"
 futures = "0.3"
 
 # HTTP (Linux)
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tower = "0.4"
 
 # Internal crates

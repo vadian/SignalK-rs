@@ -1,14 +1,28 @@
-use signalk_server::{ServerConfig, ServerEvent, SignalKServer};
-use signalk_core::{Delta, PathValue, Update};
+use signalk_server::{ServerConfig, ServerEvent};
+use signalk_core::{Delta, PathValue, Update, SignalKStore, MemoryStore};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, State, WebSocketUpgrade},
     http::StatusCode,
-    response::Json,
+    response::{Json, IntoResponse},
     routing::get,
     Router,
 };
+use axum::extract::ws::{WebSocket, Message};
+use tower_http::services::ServeDir;
+use futures::{sink::SinkExt, stream::StreamExt};
+use tokio::sync::{broadcast, RwLock};
+
+type SharedStore = Arc<RwLock<MemoryStore>>;
+
+#[derive(Clone)]
+struct AppState {
+    store: SharedStore,
+    delta_tx: broadcast::Sender<Delta>,
+    config: ServerConfig,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,35 +36,52 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("SignalK Server starting...");
 
-    // Configuration
-    let ws_addr: SocketAddr = "0.0.0.0:3000".parse()?;
-    let http_addr: SocketAddr = "0.0.0.0:3001".parse()?;
+    // Configuration - single port for everything
+    let addr: SocketAddr = "0.0.0.0:3001".parse()?;
 
     let config = ServerConfig {
         name: "signalk-server-rust".to_string(),
         version: "1.7.0".to_string(),
-        bind_addr: ws_addr,
+        bind_addr: addr,
         self_urn: "urn:mrn:signalk:uuid:c0d79334-4e25-4245-8892-54e8ccc8021d".to_string(),
     };
 
-    // Start WebSocket server
-    let server = SignalKServer::new(config);
-    let event_tx = server.event_sender();
+    // Create server components
+    let store = Arc::new(RwLock::new(MemoryStore::new(&config.self_urn)));
+    let (delta_tx, _delta_rx) = broadcast::channel::<Delta>(1024);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ServerEvent>(1024);
     
-    // Clone for HTTP server
-    let store = server.store();
+    // Clone for processors
+    let store_clone = store.clone();
+    let delta_tx_clone = delta_tx.clone();
     
-    // Spawn WebSocket server
-    let ws_handle = tokio::spawn(async move {
-        if let Err(e) = server.run().await {
-            tracing::error!("WebSocket server error: {}", e);
+    // Spawn delta processor
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                ServerEvent::DeltaReceived(delta) => {
+                    // Store delta
+                    {
+                        let mut st = store_clone.write().await;
+                        st.apply_delta(&delta);
+                    }
+                    // Broadcast to WebSocket clients
+                    let _ = delta_tx_clone.send(delta);
+                }
+            }
         }
     });
 
-    // Start HTTP API server
+    let app_state = AppState {
+        store,
+        delta_tx,
+        config: config.clone(),
+    };
+
+    // Start unified HTTP + WebSocket server
     let http_handle = tokio::spawn(async move {
-        if let Err(e) = start_http_server(http_addr, store).await {
-            tracing::error!("HTTP server error: {}", e);
+        if let Err(e) = start_unified_server(addr, app_state).await {
+            tracing::error!("Server error: {}", e);
         }
     });
 
@@ -59,26 +90,22 @@ async fn main() -> anyhow::Result<()> {
         generate_demo_data(event_tx).await;
     });
 
-    tracing::info!("🚀 SignalK Server ready!");
-    tracing::info!("   WebSocket: ws://localhost:3000/signalk/v1/stream");
-    tracing::info!("   HTTP API:  http://localhost:3001/signalk/v1/api");
-    tracing::info!("   Discovery: http://localhost:3001/signalk");
+    tracing::info!("Server ready!");
     tracing::info!("");
-    tracing::info!("Try these commands:");
-    tracing::info!("   curl http://localhost:3001/signalk");
-    tracing::info!("   curl http://localhost:3001/signalk/v1/api/vessels/self/navigation/position");
-    tracing::info!("   websocat ws://localhost:3000/signalk/v1/stream");
+    tracing::info!("   Admin UI:    http://localhost:3001/admin/");
+    tracing::info!("   REST API:    http://localhost:3001/signalk/v1/api");
+    tracing::info!("   WebSocket:   ws://localhost:3001/signalk/v1/stream");
+    tracing::info!("   Docs:        http://localhost:3001/documentation/rapidoc.html");
+    tracing::info!("");
+    tracing::info!("Open http://localhost:3001/admin/ in your browser!");
 
     // Wait for shutdown signal
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Received Ctrl+C, shutting down...");
         }
-        _ = ws_handle => {
-            tracing::warn!("WebSocket server stopped");
-        }
         _ = http_handle => {
-            tracing::warn!("HTTP server stopped");
+            tracing::warn!("Server stopped");
         }
         _ = demo_handle => {
             tracing::warn!("Demo data generator stopped");
@@ -89,60 +116,125 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Start the HTTP API server
-async fn start_http_server(
+async fn start_unified_server(
     addr: SocketAddr,
-    store: std::sync::Arc<tokio::sync::RwLock<signalk_core::MemoryStore>>,
+    state: AppState,
 ) -> anyhow::Result<()> {
-    // Shared state
-    let app_state = store;
-
+    // Serve admin UI from reference implementation
+    let admin_ui_path = "/home/vadian/signalk-server/packages/server-admin-ui/public";
+    let documentation_path = "/home/vadian/signalk-server/public";
+    
     // Build router
     let app = Router::new()
+        // WebSocket endpoint
+        .route("/signalk/v1/stream", get(websocket_handler))
+        // Discovery endpoint
         .route("/signalk", get(discovery_handler))
+        // REST API endpoints
         .route("/signalk/v1/api", get(full_api_handler))
         .route("/signalk/v1/api/*path", get(path_handler))
-        .with_state(app_state);
+        // Admin UI (React SPA)
+        .nest_service("/admin", ServeDir::new(admin_ui_path))
+        // Documentation
+        .nest_service("/documentation", ServeDir::new(documentation_path))
+        // Redirect root to admin UI
+        .route("/", get(|| async { axum::response::Redirect::permanent("/admin/") }))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("HTTP server listening on {}", addr);
+    tracing::info!("Server listening on {}", addr);
     axum::serve(listener, app).await?;
     Ok(())
 }
 
-/// Discovery endpoint handler
-async fn discovery_handler() -> Json<serde_json::Value> {
+async fn websocket_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_websocket(socket, state))
+}
+
+async fn handle_websocket(socket: WebSocket, state: AppState) {
+    let (mut sender, mut receiver) = socket.split();
+    let mut delta_rx = state.delta_tx.subscribe();
+    
+    // Send Hello message
+    let hello = signalk_protocol::HelloMessage {
+        name: state.config.name.clone(),
+        version: state.config.version.clone(),
+        self_urn: state.config.self_urn.clone(),
+        roles: vec!["master".to_string(), "main".to_string()],
+        timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    };
+    
+    let hello_msg = signalk_protocol::ServerMessage::Hello(hello);
+    if let Ok(json) = serde_json::to_string(&hello_msg) {
+        if sender.send(Message::Text(json)).await.is_err() {
+            return;
+        }
+    }
+    
+    // Spawn task to send deltas to client
+    let mut send_task = tokio::spawn(async move {
+        while let Ok(delta) = delta_rx.recv().await {
+            let msg = signalk_protocol::ServerMessage::Delta(delta);
+            if let Ok(json) = serde_json::to_string(&msg) {
+                if sender.send(Message::Text(json)).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    
+    // Receive messages from client
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = receiver.next().await {
+            if let Message::Text(text) = msg {
+                tracing::debug!("Received: {}", text);
+                // Handle subscribe/unsubscribe messages here
+            } else if let Message::Close(_) = msg {
+                break;
+            }
+        }
+    });
+    
+    // Wait for either task to finish
+    tokio::select! {
+        _ = (&mut send_task) => recv_task.abort(),
+        _ = (&mut recv_task) => send_task.abort(),
+    }
+    
+    tracing::debug!("WebSocket connection closed");
+}
+
+async fn discovery_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "endpoints": {
             "v1": {
                 "version": "1.7.0",
                 "signalk-http": "http://localhost:3001/signalk/v1/api",
-                "signalk-ws": "ws://localhost:3000/signalk/v1/stream"
+                "signalk-ws": "ws://localhost:3001/signalk/v1/stream"
             }
         },
         "server": {
-            "id": "signalk-server-rust",
+            "id": state.config.name,
             "version": "0.1.0"
         }
     }))
 }
 
-/// Full API handler - returns entire data model
 async fn full_api_handler(
-    State(store): State<std::sync::Arc<tokio::sync::RwLock<signalk_core::MemoryStore>>>,
+    State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    use signalk_core::SignalKStore;
-    let store = store.read().await;
+    let store = state.store.read().await;
     Ok(Json(store.full_model().clone()))
 }
 
-/// Path-based API handler
 async fn path_handler(
     Path(path): Path<String>,
-    State(store): State<std::sync::Arc<tokio::sync::RwLock<signalk_core::MemoryStore>>>,
+    State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    use signalk_core::SignalKStore;
-    let store = store.read().await;
+    let store = state.store.read().await;
     
     // Remove leading slash if present
     let path = path.strip_prefix('/').unwrap_or(&path);
@@ -153,13 +245,10 @@ async fn path_handler(
     }
 }
 
-/// Generate demo data - simulated boat navigation
 async fn generate_demo_data(event_tx: tokio::sync::mpsc::Sender<ServerEvent>) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
     let mut latitude = 52.0987654;
     let mut longitude = 4.9876545;
-    let mut sog = 3.85; // Speed over ground (m/s)
-    let mut cog = 1.52; // Course over ground (radians)
     
     loop {
         interval.tick().await;
@@ -169,8 +258,8 @@ async fn generate_demo_data(event_tx: tokio::sync::mpsc::Sender<ServerEvent>) {
         longitude += 0.00002;
         
         // Vary speed and course slightly
-        sog = 3.85 + (tokio::time::Instant::now().elapsed().as_secs_f64().sin() * 0.5);
-        cog = 1.52 + (tokio::time::Instant::now().elapsed().as_secs_f64().cos() * 0.1);
+        let sog = 3.85 + (tokio::time::Instant::now().elapsed().as_secs_f64().sin() * 0.5);
+        let cog = 1.52 + (tokio::time::Instant::now().elapsed().as_secs_f64().cos() * 0.1);
         
         // Create delta message
         let delta = Delta {

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalK Server - Admin Console</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 { color: #667eea; font-size: 2.5em; margin-bottom: 10px; }
+        .status { color: #10b981; font-weight: 600; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            color: #374151;
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .icon { font-size: 1.8em; }
+        .data-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            margin: 8px 0;
+            font-family: 'Monaco', 'Courier New', monospace;
+        }
+        .label {
+            color: #6b7280;
+            font-size: 0.85em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .value {
+            color: #111827;
+            font-size: 1.1em;
+            margin-top: 4px;
+            font-weight: 500;
+        }
+        .live-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background: #10b981;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .endpoint-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .endpoint-link:hover {
+            text-decoration: underline;
+        }
+        pre {
+            background: #1f2937;
+            color: #f3f4f6;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.9em;
+            max-height: 300px;
+        }
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        .refresh-btn:hover {
+            background: #5568d3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚓ SignalK Server</h1>
+            <p class="status"><span class="live-indicator"></span> Server Running - Rust Edition v0.1.0</p>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2><span class="icon">🗺️</span> Live Navigation Data</h2>
+                <div class="data-item">
+                    <div class="label">Position</div>
+                    <div class="value" id="position">Loading...</div>
+                </div>
+                <div class="data-item">
+                    <div class="label">Speed Over Ground</div>
+                    <div class="value" id="sog">Loading...</div>
+                </div>
+                <div class="data-item">
+                    <div class="label">Course Over Ground</div>
+                    <div class="value" id="cog">Loading...</div>
+                </div>
+                <div class="data-item">
+                    <div class="label">Last Update</div>
+                    <div class="value" id="timestamp">Loading...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2><span class="icon">🔌</span> API Endpoints</h2>
+                <div class="data-item">
+                    <div class="label">Discovery</div>
+                    <div class="value">
+                        <a href="/signalk" class="endpoint-link" target="_blank">GET /signalk</a>
+                    </div>
+                </div>
+                <div class="data-item">
+                    <div class="label">Full API</div>
+                    <div class="value">
+                        <a href="/signalk/v1/api" class="endpoint-link" target="_blank">GET /signalk/v1/api</a>
+                    </div>
+                </div>
+                <div class="data-item">
+                    <div class="label">Vessels</div>
+                    <div class="value">
+                        <a href="/signalk/v1/api/vessels" class="endpoint-link" target="_blank">GET /signalk/v1/api/vessels</a>
+                    </div>
+                </div>
+                <div class="data-item">
+                    <div class="label">WebSocket Stream</div>
+                    <div class="value">
+                        <code>ws://localhost:3001/signalk/v1/stream</code>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="grid-column: 1 / -1;">
+                <h2><span class="icon">📡</span> Raw WebSocket Data</h2>
+                <div id="ws-status" style="margin-bottom: 10px; color: #6b7280;">
+                    Connecting to WebSocket...
+                </div>
+                <pre id="ws-data">Waiting for data...</pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        function connectWebSocket() {
+            const wsUrl = 'ws://localhost:3001/signalk/v1/stream';
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                document.getElementById('ws-status').innerHTML = 
+                    '<span style="color: #10b981;">● Connected</span>';
+                reconnectAttempts = 0;
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                // Display raw data
+                document.getElementById('ws-data').textContent = 
+                    JSON.stringify(data, null, 2);
+
+                // Update navigation display if it's a delta
+                if (data.updates && data.updates[0] && data.updates[0].values) {
+                    const values = data.updates[0].values;
+                    const timestamp = data.updates[0].timestamp;
+
+                    values.forEach(item => {
+                        if (item.path === 'navigation.position') {
+                            const pos = item.value;
+                            document.getElementById('position').textContent = 
+                                `${pos.latitude.toFixed(6)}°, ${pos.longitude.toFixed(6)}°`;
+                        } else if (item.path === 'navigation.speedOverGround') {
+                            const knots = (item.value * 1.94384).toFixed(2);
+                            document.getElementById('sog').textContent = 
+                                `${item.value.toFixed(2)} m/s (${knots} knots)`;
+                        } else if (item.path === 'navigation.courseOverGroundTrue') {
+                            const degrees = (item.value * 180 / Math.PI).toFixed(1);
+                            document.getElementById('cog').textContent = 
+                                `${degrees}° (${item.value.toFixed(3)} rad)`;
+                        }
+                    });
+
+                    if (timestamp) {
+                        const date = new Date(timestamp);
+                        document.getElementById('timestamp').textContent = 
+                            date.toLocaleTimeString();
+                    }
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                document.getElementById('ws-status').innerHTML = 
+                    '<span style="color: #ef4444;">● Connection Error</span>';
+            };
+
+            ws.onclose = () => {
+                document.getElementById('ws-status').innerHTML = 
+                    '<span style="color: #f59e0b;">● Disconnected</span>';
+                
+                // Attempt to reconnect
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(() => {
+                        console.log(`Reconnecting... (attempt ${reconnectAttempts})`);
+                        connectWebSocket();
+                    }, 2000);
+                }
+            };
+        }
+
+        // Connect on page load
+        connectWebSocket();
+
+        // Also poll REST API periodically as fallback
+        setInterval(() => {
+            fetch('/signalk/v1/api/vessels')
+                .then(res => res.json())
+                .then(data => {
+                    // Fallback if WebSocket is not working
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        const vesselId = Object.keys(data)[0];
+                        if (data[vesselId] && data[vesselId].navigation) {
+                            const nav = data[vesselId].navigation;
+                            if (nav.position) {
+                                const pos = nav.position.value;
+                                document.getElementById('position').textContent = 
+                                    `${pos.latitude.toFixed(6)}°, ${pos.longitude.toFixed(6)}°`;
+                            }
+                            if (nav.speedOverGround) {
+                                const sog = nav.speedOverGround.value;
+                                const knots = (sog * 1.94384).toFixed(2);
+                                document.getElementById('sog').textContent = 
+                                    `${sog.toFixed(2)} m/s (${knots} knots)`;
+                            }
+                            if (nav.courseOverGroundTrue) {
+                                const cog = nav.courseOverGroundTrue.value;
+                                const degrees = (cog * 180 / Math.PI).toFixed(1);
+                                document.getElementById('cog').textContent = 
+                                    `${degrees}° (${cog.toFixed(3)} rad)`;
+                            }
+                        }
+                    }
+                })
+                .catch(err => console.error('REST API error:', err));
+        }, 5000);
+    </script>
+</body>
+</html>
