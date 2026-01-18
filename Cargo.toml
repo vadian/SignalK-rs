@@ -7,6 +7,7 @@ members = [
     "crates/signalk-server",
     "crates/signalk-plugins",
     "crates/signalk-providers",
+    "crates/signalk-web",
     "bins/signalk-server-linux",
     # "bins/signalk-server-esp32",  # Uncomment when ESP32 toolchain is set up
 ]
@@ -44,3 +45,4 @@ signalk-protocol = { path = "crates/signalk-protocol" }
 signalk-server = { path = "crates/signalk-server" }
 signalk-plugins = { path = "crates/signalk-plugins" }
 signalk-providers = { path = "crates/signalk-providers" }
+signalk-web = { path = "crates/signalk-web" }

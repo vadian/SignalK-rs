@@ -506,13 +506,29 @@ signalk-rs/
 │   │   │   └── server_api.ts
 │   │   └── Cargo.toml            # tokio only, not esp-idf compatible
 │   │
-│   └── signalk-providers/        # Data source implementations
+│   ├── signalk-providers/        # Data source implementations
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── nmea0183.rs       # NMEA 0183 parser
+│   │   │   ├── nmea2000.rs       # NMEA 2000 (canbus)
+│   │   │   └── tcp.rs            # TCP stream input
+│   │   └── Cargo.toml
+│   │
+│   └── signalk-web/              # Admin Web UI & REST API (Linux only)
 │       ├── src/
 │       │   ├── lib.rs
-│       │   ├── nmea0183.rs       # NMEA 0183 parser
-│       │   ├── nmea2000.rs       # NMEA 2000 (canbus)
-│       │   └── tcp.rs            # TCP stream input
-│       └── Cargo.toml
+│       │   ├── routes/           # Axum route handlers
+│       │   │   ├── mod.rs
+│       │   │   ├── auth.rs       # /signalk/v1/auth/*
+│       │   │   ├── config.rs     # /skServer/settings, /vessel
+│       │   │   ├── security.rs   # /skServer/security/*
+│       │   │   ├── plugins.rs    # /skServer/plugins/*
+│       │   │   └── backup.rs     # /skServer/backup, /restore
+│       │   ├── server_events.rs  # WebSocket server events stream
+│       │   ├── statistics.rs     # Server statistics collector
+│       │   └── static_files.rs   # Serve admin UI static files
+│       ├── public/               # Embedded admin UI (built from TS)
+│       └── Cargo.toml            # axum, tower, tokio
 │
 ├── bins/
 │   ├── signalk-server-linux/     # Full-featured Linux binary
@@ -680,11 +696,12 @@ impl<S: SignalKStore> SignalKServer<S> {
 // bins/signalk-server-linux/src/main.rs
 use signalk_server::SignalKServer;
 use signalk_plugins::DenoPluginHost;
+use signalk_web::{create_router, ServerState};
 use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = load_config()?;
+    let config = load_config()?;  // From ~/.signalk/settings.json
     let store = MemoryStore::new(&config.self_urn);
     let server = SignalKServer::new(store);
 
@@ -692,9 +709,14 @@ async fn main() -> Result<()> {
     let plugins = DenoPluginHost::new(&config.plugin_dir)?;
     plugins.start_all(&server).await?;
 
-    // Start WebSocket server
+    // Create HTTP/WebSocket router (Admin UI + REST API + SignalK WS)
+    let state = ServerState::new(server, config);
+    let app = create_router(state);
+
+    // Start combined HTTP/WebSocket server
     let listener = TcpListener::bind(&config.bind_addr).await?;
-    run_server(listener, server).await
+    axum::serve(listener, app).await?;
+    Ok(())
 }
 ```
 
@@ -732,23 +754,28 @@ fn main() -> Result<()> {
 | WebSocket framing | ✓ | | |
 | TCP/networking | | tokio | esp-idf-svc |
 | Plugin system | | ✓ (Deno) | |
-| Configuration | | File-based | NVS |
+| Configuration | | File-based (JSON) | NVS |
 | HTTP/REST API | | axum | esp-idf http |
+| Admin Web UI | | ✓ (signalk-web) | |
+| Server events WS | | ✓ | |
+| Backup/restore | | ✓ | |
+| User management | | ✓ | |
 
 ---
 
 ## 7. Implementation Phases
 
 ### Phase 1: Workspace & Core Crate
-- [ ] Create `signalk-rs` workspace with crate structure
-- [ ] `signalk-core`: Data model structs (Delta, Update, Value, Source, Meta)
-- [ ] `signalk-core`: Path parsing and wildcard matching
-- [ ] `signalk-core`: MemoryStore implementation
-- [ ] Unit tests against spec JSON examples
+- [x] Create `signalk-rs` workspace with crate structure
+- [x] `signalk-core`: Data model structs (Delta, Update, Value, Source, Meta)
+- [x] `signalk-core`: Path parsing and wildcard matching
+- [x] `signalk-core`: MemoryStore implementation
+- [x] Unit tests for core functionality (12 tests passing)
 - [ ] CI setup (GitHub Actions for Linux + ESP32 cross-compile check)
 
 ### Phase 2: Protocol & Server Crate (Linux/tokio first)
-- [ ] `signalk-protocol`: Message types (Hello, Subscribe, Put, etc.)
+- [x] `signalk-protocol`: Message types (Hello, Subscribe, Put, etc.) - types defined
+- [ ] `signalk-protocol`: Codec/frame encoding-decoding logic
 - [ ] `signalk-server`: WebSocket listener (tokio-tungstenite)
 - [ ] Hello message on connect
 - [ ] Delta broadcasting to connected clients
@@ -795,10 +822,21 @@ fn main() -> Result<()> {
 - [ ] REST API (axum on Linux, esp-idf-http on ESP32)
 - [ ] HTTP routes for plugins (`registerWithRouter`)
 - [ ] Security/authentication (JWT)
-- [ ] Configuration file support (YAML/TOML)
+- [ ] Configuration file support (compatible with TS implementation)
 - [ ] mDNS discovery
 - [ ] Systemd service integration
 - [ ] Documentation and examples
+
+### Phase 9: Admin Web UI (Linux)
+- [ ] Static file serving for Admin UI (React SPA)
+- [ ] WebSocket server events endpoint (`/signalk/v1/stream?serverevents=all`)
+- [ ] REST API: Server configuration endpoints
+- [ ] REST API: Security/user management endpoints
+- [ ] REST API: Plugin management endpoints
+- [ ] REST API: Provider management endpoints
+- [ ] Real-time dashboard statistics streaming
+- [ ] Backup/restore functionality
+- [ ] Server log streaming
 
 ---
 
@@ -868,6 +906,253 @@ fn main() -> Result<()> {
 3. **Security:** Authentication required for initial version?
 4. **Multiple vessels:** Support AIS targets or self-only initially?
 5. **Config format:** YAML (like original) or TOML (Rust ecosystem)?
+
+---
+
+---
+
+## 12. Admin Web UI Requirements (from TypeScript Reference)
+
+The TypeScript implementation includes a comprehensive React-based Admin UI. For compatibility and feature parity, the Rust Linux server needs to support the same REST API endpoints and WebSocket events.
+
+### 12.1 UI Architecture Overview
+
+**Technology Stack (Reference):**
+- React 16.x + Redux state management
+- Bootstrap 4.5 with Reactstrap
+- WebSocket for real-time updates
+- Served as static files from `/admin/`
+
+**Strategy for Rust Implementation:**
+- Serve the existing React Admin UI as static files (reuse `server-admin-ui` build)
+- Implement compatible REST API endpoints in Axum
+- Implement compatible WebSocket server events
+- Use identical configuration file structure for compatibility
+
+### 12.2 UI Pages & Features
+
+| Route | Component | Purpose |
+|-------|-----------|---------|
+| `/admin/#/dashboard` | Dashboard | Real-time server statistics, provider activity |
+| `/admin/#/webapps` | Webapps | List and manage installed webapps |
+| `/admin/#/databrowser` | DataBrowser | Browse Signal K data tree |
+| `/admin/#/serverConfiguration/datafiddler` | Playground | Delta/JSON editor & tester |
+| `/admin/#/appstore` | Apps | Install/manage plugins and apps |
+| `/admin/#/serverConfiguration/plugins/:id` | PluginConfig | Individual plugin settings |
+| `/admin/#/serverConfiguration/settings` | Settings | Server-wide settings |
+| `/admin/#/serverConfiguration/backuprestore` | BackupRestore | Backup/restore configuration |
+| `/admin/#/serverConfiguration/connections/:id` | Providers | Data provider configuration |
+| `/admin/#/serverConfiguration/log` | ServerLog | Real-time server logs |
+| `/admin/#/serverConfiguration/update` | ServerUpdate | Check/install server updates |
+| `/admin/#/security/settings` | SecuritySettings | Security configuration |
+| `/admin/#/security/users` | Users | User management |
+| `/admin/#/security/devices` | Devices | Device/client management |
+| `/admin/#/security/access/requests` | AccessRequests | Handle access requests |
+
+### 12.3 REST API Endpoints
+
+**Base Paths:**
+- Signal K API: `/signalk/v1`
+- Server routes: `/skServer` (configurable via `SERVERROUTESPREFIX`)
+- Admin UI static: `/admin/`
+- Documentation: `/documentation/`
+
+#### Authentication & Security
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/skServer/loginStatus` | Get current login/auth status |
+| POST | `/signalk/v1/auth/login` | User login |
+| PUT | `/signalk/v1/auth/logout` | User logout |
+| GET | `/skServer/security/config` | Retrieve security settings |
+| PUT | `/skServer/security/config` | Update security configuration |
+| GET | `/skServer/security/users` | List all users |
+| POST | `/skServer/security/users/:id` | Create new user |
+| PUT | `/skServer/security/users/:id` | Update user |
+| DELETE | `/skServer/security/users/:username` | Delete user |
+| PUT | `/skServer/security/user/:username/password` | Change user password |
+| GET | `/skServer/security/devices` | List authorized devices |
+| PUT | `/skServer/security/devices/:uuid` | Update device permissions |
+| DELETE | `/skServer/security/devices/:uuid` | Remove device |
+| GET | `/skServer/security/access/requests` | Get pending access requests |
+| PUT | `/skServer/security/access/requests/:id/:status` | Handle access request |
+| POST | `/signalk/v1/access/requests` | Submit access request |
+| GET | `/signalk/v1/requests/:id` | Query request status |
+| POST | `/skServer/enableSecurity` | Enable security on first run |
+
+#### Configuration
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/skServer/settings` | Get server settings |
+| PUT | `/skServer/settings` | Update server settings |
+| GET | `/skServer/vessel` | Get vessel information |
+| PUT | `/skServer/vessel` | Update vessel configuration |
+| GET | `/skServer/plugins` | List plugins |
+| POST | `/skServer/plugins/:id/config` | Save plugin configuration |
+| GET | `/signalk/v1/apps/list` | Get available apps/plugins |
+
+#### Server Management
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| PUT | `/skServer/restart` | Restart server |
+| POST | `/skServer/backup` | Create backup ZIP |
+| POST | `/skServer/restore` | Restore from backup |
+| GET | `/skServer/backup` | Download backup |
+| POST | `/skServer/debug` | Enable/disable debug namespaces |
+| GET | `/skServer/debugKeys` | List available debug keys |
+
+#### Specialized APIs
+
+| API | Base Path | Purpose |
+|-----|-----------|---------|
+| Resources | `/signalk/v1/api/resources` | Waypoints, routes, notes, regions |
+| Course | `/signalk/v1/api/course` | Navigation course management |
+| Autopilot | `/signalk/v1/api/autopilot` | Autopilot control |
+| Discovery | `/signalk` | Service discovery (endpoints.json) |
+| Notifications | Via delta stream | Alert management |
+
+### 12.4 WebSocket Server Events
+
+**Connection URL:** `ws://host:port/signalk/v1/stream?serverevents=all&subscribe=none&sendMeta=all`
+
+**Server Event Message Types:**
+
+```typescript
+// Provider/plugin status updates
+{ "type": "PROVIDERSTATUS", "data": ProviderStatus[] }
+
+// Performance metrics (deltas/sec, active paths, client count, uptime)
+{ "type": "SERVERSTATISTICS", "data": ServerStatistics }
+
+// Real-time log entries
+{ "type": "LOG", "data": { level: string, message: string, timestamp: string } }
+```
+
+**Server Statistics Structure:**
+```typescript
+interface ServerStatistics {
+  deltaRate: number;        // Deltas per second
+  numberOfAvailablePaths: number;
+  wsClients: number;        // Connected WebSocket clients
+  providerStatistics: ProviderStats[];
+  uptime: number;           // Seconds since start
+}
+```
+
+### 12.5 Configuration File Structure (Compatibility)
+
+To maintain compatibility with existing installations and the Admin UI, use the same configuration structure:
+
+**Directory Structure:**
+```
+~/.signalk/
+├── settings.json          # Server configuration
+├── security.json          # Security settings (users, ACLs)
+├── defaults.json          # Default Signal K values (legacy)
+├── plugin-config-data/    # Per-plugin configuration
+│   └── <plugin-id>.json
+├── resources/             # Resource API data
+└── logs/                  # Server logs
+```
+
+**settings.json Schema:**
+```typescript
+interface Settings {
+  interfaces?: {
+    appstore?: boolean;
+    applicationData?: boolean;
+    nmea0183?: boolean;
+    plugins?: boolean;
+    resources?: boolean;
+    rest?: boolean;
+    "signalk-ws"?: boolean;
+    tcp?: boolean;
+    webapps?: boolean;
+  };
+  ssl?: boolean;
+  port?: number;
+  sslport?: number;
+  wsCompression?: boolean;
+  accessLogging?: boolean;
+  landingPage?: string;
+  mdns?: boolean;
+  pruneContextsMinutes?: number;
+  keepMostRecentLogsOnly?: boolean;
+  logCountToKeep?: number;
+  enablePluginLogging?: boolean;
+  loggingDirectory?: string;
+  sourcePriorities?: Record<string, SourcePriority[]>;
+  security?: { strategy: string };
+  pipedProviders?: ProviderConfig[];
+}
+```
+
+**Vessel Configuration (in settings or separate):**
+```typescript
+interface VesselInfo {
+  name?: string;
+  mmsi?: string;
+  uuid?: string;
+  design?: {
+    length?: { value: { overall: number } };
+    beam?: { value: number };
+    draft?: { value: { maximum: number } };
+    airHeight?: { value: number };
+  };
+  sensors?: {
+    gps?: {
+      fromBow?: number;
+      fromCenter?: number;
+    };
+  };
+  communication?: {
+    callsignVhf?: string;
+  };
+  registrations?: {
+    imo?: string;
+    other?: Record<string, string>;
+  };
+}
+```
+
+### 12.6 Dashboard Features
+
+The Dashboard provides real-time server monitoring:
+
+1. **Delta Throughput** - deltas/second graph
+2. **Active Paths Count** - number of unique paths with values
+3. **WebSocket Client Count** - connected clients
+4. **Server Uptime** - formatted duration
+5. **Provider Status Table:**
+   - Provider ID and type
+   - Connection status (connected/error)
+   - Delta count
+   - Error messages
+   - Links to configuration
+6. **Plugin Status** - active plugins with pulse indicators
+
+### 12.7 Implementation Notes
+
+**Static File Serving:**
+```rust
+// Serve admin UI from embedded files or directory
+Router::new()
+    .nest_service("/admin", ServeDir::new("public/admin"))
+    .nest_service("/documentation", ServeDir::new("public/documentation"))
+```
+
+**Server Events WebSocket:**
+- Maintain separate subscription for server events
+- Broadcast statistics at 1 Hz
+- Broadcast provider status on change
+- Broadcast log entries in real-time
+
+**Backup/Restore:**
+- Create ZIP of `~/.signalk/` contents
+- Exclude `node_modules`, logs
+- Support selective restoration
 
 ---
 
