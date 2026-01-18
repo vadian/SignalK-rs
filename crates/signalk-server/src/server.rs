@@ -14,6 +14,7 @@ use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, info, warn};
@@ -150,8 +151,39 @@ async fn handle_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("New connection from {}", addr);
 
-    // Perform WebSocket handshake
-    let ws_stream = tokio_tungstenite::accept_async(stream).await?;
+    // Parse query parameters from WebSocket handshake
+    let subscribe_mode = Arc::new(RwLock::new(String::from("self")));
+    let send_cached = Arc::new(RwLock::new(true));
+
+    let subscribe_mode_clone = subscribe_mode.clone();
+    let send_cached_clone = send_cached.clone();
+
+    // Perform WebSocket handshake with callback to extract query params
+    let ws_stream = tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp: Response| {
+        // Extract query parameters from the URI
+        if let Some(query) = req.uri().query() {
+            for param in query.split('&') {
+                if let Some((key, value)) = param.split_once('=') {
+                    match key {
+                        "subscribe" => {
+                            if let Ok(mut mode) = subscribe_mode_clone.try_write() {
+                                *mode = value.to_string();
+                            }
+                        }
+                        "sendCachedValues" => {
+                            if let Ok(mut cached) = send_cached_clone.try_write() {
+                                *cached = value == "true";
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(resp)
+    })
+    .await?;
+    
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
     // Send Hello message
@@ -163,11 +195,17 @@ async fn handle_connection(
     // Initialize subscription manager for this client
     let mut subscriptions = SubscriptionManager::new(&config.self_urn);
 
-    // Default subscription is "self" - subscribe to all self vessel data
-    subscriptions.subscribe_self_all();
+    // Apply initial subscription based on query parameter
+    let subscribe_mode_value = subscribe_mode.read().await.clone();
+    match subscribe_mode_value.as_str() {
+        "all" => subscriptions.subscribe_all(),
+        "none" => {}, // No default subscriptions
+        _ => subscriptions.subscribe_self_all(), // "self" or default
+    }
 
-    // Send cached values for initial subscription
-    {
+    // Send cached values for initial subscription if requested
+    let send_cached_value = *send_cached.read().await;
+    if send_cached_value {
         let store = store.read().await;
         if let Some(delta) = subscriptions.get_initial_delta(&store) {
             let msg = encode_server_message(&ServerMessage::Delta(delta))?;

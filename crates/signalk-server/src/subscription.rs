@@ -274,4 +274,204 @@ mod tests {
         assert_eq!(filtered.updates[0].values.len(), 1);
         assert_eq!(filtered.updates[0].values[0].path, "navigation.speedOverGround");
     }
+
+    #[test]
+    fn test_subscription_with_period() {
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.add_subscriptions("vessels.self", &[Subscription {
+            path: "navigation.*".to_string(),
+            period: Some(1000),
+            format: None,
+            policy: Some(SubscriptionPolicy::Instant),
+            min_period: Some(100),
+        }]);
+
+        // Verify subscription was added
+        assert!(mgr.matches("vessels.self", "navigation.speedOverGround"));
+    }
+
+    #[test]
+    fn test_unsubscribe_specific_path() {
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        
+        mgr.add_subscriptions("vessels.self", &[
+            Subscription {
+                path: "navigation.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            },
+            Subscription {
+                path: "environment.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            },
+        ]);
+
+        assert!(mgr.matches("vessels.self", "navigation.speedOverGround"));
+        assert!(mgr.matches("vessels.self", "environment.wind.speedApparent"));
+
+        // Unsubscribe from navigation only
+        mgr.remove_subscription("vessels.self", "navigation.*");
+
+        assert!(!mgr.matches("vessels.self", "navigation.speedOverGround"));
+        assert!(mgr.matches("vessels.self", "environment.wind.speedApparent"));
+    }
+
+    #[test]
+    fn test_filter_delta_no_match() {
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.add_subscriptions("vessels.self", &[Subscription {
+            path: "navigation.*".to_string(),
+            period: None,
+            format: None,
+            policy: None,
+            min_period: None,
+        }]);
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                values: vec![
+                    PathValue {
+                        path: "environment.wind.speedApparent".to_string(),
+                        value: serde_json::json!(5.0),
+                    },
+                ],
+                meta: None,
+            }],
+        };
+
+        let filtered = mgr.filter_delta(&delta);
+        assert!(filtered.is_none());
+    }
+
+    #[test]
+    fn test_filter_preserves_metadata() {
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.add_subscriptions("vessels.self", &[Subscription {
+            path: "navigation.*".to_string(),
+            period: None,
+            format: None,
+            policy: None,
+            min_period: None,
+        }]);
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps".to_string()),
+                source: None,
+                timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                values: vec![
+                    PathValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: serde_json::json!(3.5),
+                    },
+                ],
+                meta: None,
+            }],
+        };
+
+        let filtered = mgr.filter_delta(&delta).unwrap();
+        assert_eq!(filtered.updates[0].source_ref, Some("gps".to_string()));
+        assert_eq!(filtered.updates[0].timestamp, Some("2024-01-01T00:00:00Z".to_string()));
+    }
+
+    #[test]
+    fn test_multiple_matching_subscriptions() {
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        
+        // Add overlapping subscriptions
+        mgr.add_subscriptions("vessels.self", &[
+            Subscription {
+                path: "navigation.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            },
+            Subscription {
+                path: "navigation.speedOverGround".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            },
+        ]);
+
+        // Should match (via either subscription)
+        assert!(mgr.matches("vessels.self", "navigation.speedOverGround"));
+    }
+
+    #[test]
+    fn test_context_resolution_with_urn() {
+        let sub = ClientSubscription::new("vessels.self", "navigation.*");
+
+        // Should match actual URN as well as "vessels.self"
+        assert!(sub.matches("vessels.self", "navigation.speedOverGround"));
+        assert!(sub.matches("vessels.urn:mrn:signalk:uuid:test", "navigation.speedOverGround"));
+    }
+
+    #[test]
+    fn test_wildcard_all_contexts() {
+        let sub = ClientSubscription::new("*", "*");
+
+        assert!(sub.matches("vessels.self", "navigation.speedOverGround"));
+        assert!(sub.matches("vessels.urn:mrn:test", "environment.wind.speedApparent"));
+        assert!(sub.matches("aircraft.self", "navigation.position"));
+    }
+
+    #[test]
+    fn test_filter_multiple_updates() {
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.add_subscriptions("vessels.self", &[Subscription {
+            path: "navigation.*".to_string(),
+            period: None,
+            format: None,
+            policy: None,
+            min_period: None,
+        }]);
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![
+                Update {
+                    source_ref: Some("gps".to_string()),
+                    source: None,
+                    timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                    values: vec![
+                        PathValue {
+                            path: "navigation.speedOverGround".to_string(),
+                            value: serde_json::json!(3.5),
+                        },
+                    ],
+                    meta: None,
+                },
+                Update {
+                    source_ref: Some("wind".to_string()),
+                    source: None,
+                    timestamp: Some("2024-01-01T00:00:01Z".to_string()),
+                    values: vec![
+                        PathValue {
+                            path: "environment.wind.speedApparent".to_string(),
+                            value: serde_json::json!(10.0),
+                        },
+                    ],
+                    meta: None,
+                },
+            ],
+        };
+
+        let filtered = mgr.filter_delta(&delta).unwrap();
+        // Should only have one update (navigation)
+        assert_eq!(filtered.updates.len(), 1);
+        assert_eq!(filtered.updates[0].source_ref, Some("gps".to_string()));
+    }
 }

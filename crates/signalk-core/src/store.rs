@@ -169,6 +169,13 @@ mod tests {
     fn test_new_store() {
         let store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
         assert_eq!(store.self_urn(), "urn:mrn:signalk:uuid:test-vessel");
+        
+        // Verify initial structure
+        let full = store.full_model();
+        assert_eq!(full["version"], "1.7.0");
+        assert_eq!(full["self"], "vessels.urn:mrn:signalk:uuid:test-vessel");
+        assert!(full["vessels"].is_object());
+        assert!(full["sources"].is_object());
     }
 
     #[test]
@@ -193,6 +200,8 @@ mod tests {
 
         let value = store.get_self_path("navigation.speedOverGround").unwrap();
         assert_eq!(value["value"], serde_json::json!(3.85));
+        assert_eq!(value["$source"], "test.source");
+        assert_eq!(value["timestamp"], "2024-01-17T10:30:00.000Z");
     }
 
     #[test]
@@ -223,5 +232,275 @@ mod tests {
 
         let context = store.get_context("vessels.self").unwrap();
         assert!(context["navigation"]["speedOverGround"]["value"] == serde_json::json!(3.85));
+    }
+
+    #[test]
+    fn test_multiple_updates_same_path() {
+        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        // First update
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps1".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+
+        // Second update (should overwrite)
+        let delta2 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps2".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:01:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(4.12),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta2);
+
+        let value = store.get_self_path("navigation.speedOverGround").unwrap();
+        assert_eq!(value["value"], serde_json::json!(4.12));
+        assert_eq!(value["$source"], "gps2");
+    }
+
+    #[test]
+    fn test_nested_path_creation() {
+        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "propulsion.mainEngine.oilTemperature".to_string(),
+                    value: serde_json::json!(85.5),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta);
+
+        // Verify intermediate objects were created
+        let value = store.get_self_path("propulsion.mainEngine.oilTemperature").unwrap();
+        assert_eq!(value["value"], serde_json::json!(85.5));
+    }
+
+    #[test]
+    fn test_get_path_absolute() {
+        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta);
+
+        // Query with absolute path
+        let value = store
+            .get_path("vessels.urn:mrn:signalk:uuid:test-vessel.navigation.speedOverGround")
+            .unwrap();
+        assert_eq!(value["value"], serde_json::json!(3.85));
+    }
+
+    #[test]
+    fn test_get_path_nonexistent() {
+        let store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        // Query non-existent path
+        let value = store.get_self_path("navigation.nonexistent");
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_complex_value_types() {
+        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![
+                    PathValue {
+                        path: "navigation.position".to_string(),
+                        value: serde_json::json!({
+                            "latitude": 47.123456,
+                            "longitude": -122.654321
+                        }),
+                    },
+                    PathValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: serde_json::json!(3.85),
+                    },
+                    PathValue {
+                        path: "navigation.destination.waypoint".to_string(),
+                        value: serde_json::json!("WP001"),
+                    },
+                ],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta);
+
+        let position = store.get_self_path("navigation.position").unwrap();
+        assert_eq!(position["value"]["latitude"], 47.123456);
+        assert_eq!(position["value"]["longitude"], -122.654321);
+
+        let speed = store.get_self_path("navigation.speedOverGround").unwrap();
+        assert_eq!(speed["value"], 3.85);
+
+        let waypoint = store.get_self_path("navigation.destination.waypoint").unwrap();
+        assert_eq!(waypoint["value"], "WP001");
+    }
+
+    #[test]
+    fn test_null_value_handling() {
+        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        // Set a value
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+
+        // Set to null (clear the value)
+        let delta2 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:01:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::Value::Null,
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta2);
+
+        let value = store.get_self_path("navigation.speedOverGround").unwrap();
+        assert!(value["value"].is_null());
+    }
+
+    #[test]
+    fn test_multiple_contexts() {
+        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        // Update self vessel
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+
+        // Update another vessel
+        let delta2 = Delta {
+            context: Some("vessels.urn:mrn:signalk:uuid:other-vessel".to_string()),
+            updates: vec![Update {
+                source_ref: Some("ais".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(5.2),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta2);
+
+        // Verify both contexts exist
+        let self_speed = store.get_self_path("navigation.speedOverGround").unwrap();
+        assert_eq!(self_speed["value"], 3.85);
+
+        let other_speed = store
+            .get_path("vessels.urn:mrn:signalk:uuid:other-vessel.navigation.speedOverGround")
+            .unwrap();
+        assert_eq!(other_speed["value"], 5.2);
+    }
+
+    #[test]
+    fn test_full_model_query() {
+        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![
+                    PathValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: serde_json::json!(3.85),
+                    },
+                    PathValue {
+                        path: "environment.wind.speedApparent".to_string(),
+                        value: serde_json::json!(12.5),
+                    },
+                ],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta);
+
+        let model = store.full_model();
+        assert_eq!(model["version"], "1.7.0");
+        assert!(model["vessels"]["urn:mrn:signalk:uuid:test-vessel"]["navigation"].is_object());
+        assert!(model["vessels"]["urn:mrn:signalk:uuid:test-vessel"]["environment"].is_object());
     }
 }
