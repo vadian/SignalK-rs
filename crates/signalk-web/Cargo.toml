@@ -33,3 +33,6 @@ embed-ui = ["rust-embed"]  # Embed admin UI in binary
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -774,17 +774,17 @@ fn main() -> Result<()> {
 - [ ] CI setup (GitHub Actions for Linux + ESP32 cross-compile check)
 
 ### Phase 2: Protocol & Server Crate (Linux/tokio first)
-- [x] `signalk-protocol`: Message types (Hello, Subscribe, Put, etc.) - types defined
-- [ ] `signalk-protocol`: Codec/frame encoding-decoding logic
-- [ ] `signalk-server`: WebSocket listener (tokio-tungstenite)
-- [ ] Hello message on connect
-- [ ] Delta broadcasting to connected clients
-- [ ] Basic subscription handling (`subscribe=all/none/self`)
-- [ ] Integration test with SignalK client library
+- [x] `signalk-protocol`: Message types (Hello, Subscribe, Put, etc.)
+- [x] `signalk-protocol`: Codec/frame encoding-decoding logic
+- [x] `signalk-server`: WebSocket listener (tokio-tungstenite)
+- [x] Hello message on connect
+- [x] Delta broadcasting to connected clients
+- [x] Basic subscription handling (`subscribe=all/none/self`)
+- [x] Integration test with WebSocket client (6 tests)
 
 ### Phase 3: Full Subscription Management
-- [ ] Path pattern matching with wildcards
-- [ ] Per-client subscription tracking
+- [x] Path pattern matching with wildcards
+- [x] Per-client subscription tracking
 - [ ] Policy implementation (instant/ideal/fixed)
 - [ ] Period/minPeriod throttling
 - [ ] Delta cache for `sendCachedValues=true`

@@ -19,3 +19,6 @@ signalk-protocol = { workspace = true }
 # signalk-server = { workspace = true, default-features = false, features = ["esp-idf-runtime"] }
 # esp-idf-svc = "0.48"
 # esp-idf-hal = "0.43"
+
+[lints]
+workspace = true

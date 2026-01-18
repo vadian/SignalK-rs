@@ -23,3 +23,11 @@ tracing = { workspace = true }
 tokio = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+
+[lints]
+workspace = true
