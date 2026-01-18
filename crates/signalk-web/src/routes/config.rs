@@ -251,10 +251,7 @@ async fn get_vessel(State(_state): State<AppState>) -> Json<VesselInfo> {
 }
 
 /// PUT /skServer/vessel
-async fn put_vessel(
-    State(_state): State<AppState>,
-    Json(_vessel): Json<VesselInfo>,
-) -> StatusCode {
+async fn put_vessel(State(_state): State<AppState>, Json(_vessel): Json<VesselInfo>) -> StatusCode {
     // TODO: Update SignalK store and persist
     StatusCode::OK
 }

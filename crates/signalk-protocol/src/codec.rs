@@ -53,7 +53,7 @@ pub fn is_put_message(text: &str) -> bool {
 mod tests {
     use super::*;
     use crate::messages::HelloMessage;
-    use signalk_core::{Delta, Update, PathValue};
+    use signalk_core::{Delta, PathValue, Update};
 
     #[test]
     fn test_encode_hello() {

@@ -139,7 +139,11 @@ pub struct HelloMessage {
 
 impl HelloMessage {
     /// Create a new Hello message.
-    pub fn new(name: impl Into<String>, version: impl Into<String>, self_urn: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        self_urn: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             version: version.into(),

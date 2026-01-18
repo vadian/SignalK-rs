@@ -85,7 +85,8 @@ impl SubscriptionManager {
 
     /// Subscribe to all paths for the self vessel (default subscription).
     pub fn subscribe_self_all(&mut self) {
-        self.subscriptions.push(ClientSubscription::new("vessels.self", "*"));
+        self.subscriptions
+            .push(ClientSubscription::new("vessels.self", "*"));
     }
 
     /// Subscribe to nothing (clear all subscriptions).
@@ -102,7 +103,8 @@ impl SubscriptionManager {
     /// Add subscriptions from a subscribe request.
     pub fn add_subscriptions(&mut self, context: &str, subs: &[Subscription]) {
         for sub in subs {
-            self.subscriptions.push(ClientSubscription::from_protocol(context, sub));
+            self.subscriptions
+                .push(ClientSubscription::from_protocol(context, sub));
         }
     }
 
@@ -112,7 +114,8 @@ impl SubscriptionManager {
             // Unsubscribe from everything
             self.subscriptions.clear();
         } else {
-            self.subscriptions.retain(|s| !(s.context == context && s.path == path));
+            self.subscriptions
+                .retain(|s| !(s.context == context && s.path == path));
         }
     }
 
@@ -128,7 +131,11 @@ impl SubscriptionManager {
         let context = delta.context.as_deref().unwrap_or("vessels.self");
 
         // Check if any subscription could match this context
-        if !self.subscriptions.iter().any(|s| s.matches_context(context)) {
+        if !self
+            .subscriptions
+            .iter()
+            .any(|s| s.matches_context(context))
+        {
             return None;
         }
 
@@ -181,7 +188,7 @@ impl SubscriptionManager {
             // This is a simplified implementation
             Some(Delta {
                 context: Some("vessels.self".to_string()),
-                updates: vec![],  // TODO: Properly convert state to delta
+                updates: vec![], // TODO: Properly convert state to delta
             })
         } else {
             None
@@ -226,13 +233,16 @@ mod tests {
 
         // Subscribe to specific path
         mgr.subscribe_none();
-        mgr.add_subscriptions("vessels.self", &[Subscription {
-            path: "navigation.*".to_string(),
-            period: Some(1000),
-            format: None,
-            policy: None,
-            min_period: None,
-        }]);
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[Subscription {
+                path: "navigation.*".to_string(),
+                period: Some(1000),
+                format: None,
+                policy: None,
+                min_period: None,
+            }],
+        );
 
         assert!(mgr.matches("vessels.self", "navigation.position"));
         assert!(!mgr.matches("vessels.self", "environment.wind.speedApparent"));
@@ -241,13 +251,16 @@ mod tests {
     #[test]
     fn test_filter_delta() {
         let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
-        mgr.add_subscriptions("vessels.self", &[Subscription {
-            path: "navigation.*".to_string(),
-            period: None,
-            format: None,
-            policy: None,
-            min_period: None,
-        }]);
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[Subscription {
+                path: "navigation.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            }],
+        );
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -272,19 +285,25 @@ mod tests {
         let filtered = mgr.filter_delta(&delta).unwrap();
         assert_eq!(filtered.updates.len(), 1);
         assert_eq!(filtered.updates[0].values.len(), 1);
-        assert_eq!(filtered.updates[0].values[0].path, "navigation.speedOverGround");
+        assert_eq!(
+            filtered.updates[0].values[0].path,
+            "navigation.speedOverGround"
+        );
     }
 
     #[test]
     fn test_subscription_with_period() {
         let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
-        mgr.add_subscriptions("vessels.self", &[Subscription {
-            path: "navigation.*".to_string(),
-            period: Some(1000),
-            format: None,
-            policy: Some(SubscriptionPolicy::Instant),
-            min_period: Some(100),
-        }]);
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[Subscription {
+                path: "navigation.*".to_string(),
+                period: Some(1000),
+                format: None,
+                policy: Some(SubscriptionPolicy::Instant),
+                min_period: Some(100),
+            }],
+        );
 
         // Verify subscription was added
         assert!(mgr.matches("vessels.self", "navigation.speedOverGround"));
@@ -293,23 +312,26 @@ mod tests {
     #[test]
     fn test_unsubscribe_specific_path() {
         let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
-        
-        mgr.add_subscriptions("vessels.self", &[
-            Subscription {
-                path: "navigation.*".to_string(),
-                period: None,
-                format: None,
-                policy: None,
-                min_period: None,
-            },
-            Subscription {
-                path: "environment.*".to_string(),
-                period: None,
-                format: None,
-                policy: None,
-                min_period: None,
-            },
-        ]);
+
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[
+                Subscription {
+                    path: "navigation.*".to_string(),
+                    period: None,
+                    format: None,
+                    policy: None,
+                    min_period: None,
+                },
+                Subscription {
+                    path: "environment.*".to_string(),
+                    period: None,
+                    format: None,
+                    policy: None,
+                    min_period: None,
+                },
+            ],
+        );
 
         assert!(mgr.matches("vessels.self", "navigation.speedOverGround"));
         assert!(mgr.matches("vessels.self", "environment.wind.speedApparent"));
@@ -324,13 +346,16 @@ mod tests {
     #[test]
     fn test_filter_delta_no_match() {
         let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
-        mgr.add_subscriptions("vessels.self", &[Subscription {
-            path: "navigation.*".to_string(),
-            period: None,
-            format: None,
-            policy: None,
-            min_period: None,
-        }]);
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[Subscription {
+                path: "navigation.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            }],
+        );
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -338,12 +363,10 @@ mod tests {
                 source_ref: Some("test".to_string()),
                 source: None,
                 timestamp: Some("2024-01-01T00:00:00Z".to_string()),
-                values: vec![
-                    PathValue {
-                        path: "environment.wind.speedApparent".to_string(),
-                        value: serde_json::json!(5.0),
-                    },
-                ],
+                values: vec![PathValue {
+                    path: "environment.wind.speedApparent".to_string(),
+                    value: serde_json::json!(5.0),
+                }],
                 meta: None,
             }],
         };
@@ -355,13 +378,16 @@ mod tests {
     #[test]
     fn test_filter_preserves_metadata() {
         let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
-        mgr.add_subscriptions("vessels.self", &[Subscription {
-            path: "navigation.*".to_string(),
-            period: None,
-            format: None,
-            policy: None,
-            min_period: None,
-        }]);
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[Subscription {
+                path: "navigation.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            }],
+        );
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -369,42 +395,46 @@ mod tests {
                 source_ref: Some("gps".to_string()),
                 source: None,
                 timestamp: Some("2024-01-01T00:00:00Z".to_string()),
-                values: vec![
-                    PathValue {
-                        path: "navigation.speedOverGround".to_string(),
-                        value: serde_json::json!(3.5),
-                    },
-                ],
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.5),
+                }],
                 meta: None,
             }],
         };
 
         let filtered = mgr.filter_delta(&delta).unwrap();
         assert_eq!(filtered.updates[0].source_ref, Some("gps".to_string()));
-        assert_eq!(filtered.updates[0].timestamp, Some("2024-01-01T00:00:00Z".to_string()));
+        assert_eq!(
+            filtered.updates[0].timestamp,
+            Some("2024-01-01T00:00:00Z".to_string())
+        );
     }
 
     #[test]
     fn test_multiple_matching_subscriptions() {
         let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
-        
+
         // Add overlapping subscriptions
-        mgr.add_subscriptions("vessels.self", &[
-            Subscription {
-                path: "navigation.*".to_string(),
-                period: None,
-                format: None,
-                policy: None,
-                min_period: None,
-            },
-            Subscription {
-                path: "navigation.speedOverGround".to_string(),
-                period: None,
-                format: None,
-                policy: None,
-                min_period: None,
-            },
-        ]);
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[
+                Subscription {
+                    path: "navigation.*".to_string(),
+                    period: None,
+                    format: None,
+                    policy: None,
+                    min_period: None,
+                },
+                Subscription {
+                    path: "navigation.speedOverGround".to_string(),
+                    period: None,
+                    format: None,
+                    policy: None,
+                    min_period: None,
+                },
+            ],
+        );
 
         // Should match (via either subscription)
         assert!(mgr.matches("vessels.self", "navigation.speedOverGround"));
@@ -416,7 +446,10 @@ mod tests {
 
         // Should match actual URN as well as "vessels.self"
         assert!(sub.matches("vessels.self", "navigation.speedOverGround"));
-        assert!(sub.matches("vessels.urn:mrn:signalk:uuid:test", "navigation.speedOverGround"));
+        assert!(sub.matches(
+            "vessels.urn:mrn:signalk:uuid:test",
+            "navigation.speedOverGround"
+        ));
     }
 
     #[test]
@@ -431,13 +464,16 @@ mod tests {
     #[test]
     fn test_filter_multiple_updates() {
         let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
-        mgr.add_subscriptions("vessels.self", &[Subscription {
-            path: "navigation.*".to_string(),
-            period: None,
-            format: None,
-            policy: None,
-            min_period: None,
-        }]);
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[Subscription {
+                path: "navigation.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            }],
+        );
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -446,24 +482,20 @@ mod tests {
                     source_ref: Some("gps".to_string()),
                     source: None,
                     timestamp: Some("2024-01-01T00:00:00Z".to_string()),
-                    values: vec![
-                        PathValue {
-                            path: "navigation.speedOverGround".to_string(),
-                            value: serde_json::json!(3.5),
-                        },
-                    ],
+                    values: vec![PathValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: serde_json::json!(3.5),
+                    }],
                     meta: None,
                 },
                 Update {
                     source_ref: Some("wind".to_string()),
                     source: None,
                     timestamp: Some("2024-01-01T00:00:01Z".to_string()),
-                    values: vec![
-                        PathValue {
-                            path: "environment.wind.speedApparent".to_string(),
-                            value: serde_json::json!(10.0),
-                        },
-                    ],
+                    values: vec![PathValue {
+                        path: "environment.wind.speedApparent".to_string(),
+                        value: serde_json::json!(10.0),
+                    }],
                     meta: None,
                 },
             ],

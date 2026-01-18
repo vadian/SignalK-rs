@@ -251,7 +251,10 @@ mod tests {
         let delta: Delta = serde_json::from_str(json).unwrap();
         assert_eq!(delta.context, Some("vessels.self".to_string()));
         assert_eq!(delta.updates.len(), 1);
-        assert_eq!(delta.updates[0].values[0].path, "navigation.speedOverGround");
+        assert_eq!(
+            delta.updates[0].values[0].path,
+            "navigation.speedOverGround"
+        );
     }
 
     #[test]
@@ -281,7 +284,8 @@ mod tests {
             name: Some("signalk-server-rs".to_string()),
             version: "1.7.0".to_string(),
             timestamp: Some("2024-01-17T10:30:00.000Z".to_string()),
-            self_urn: "vessels.urn:mrn:signalk:uuid:c0d79334-4e25-4245-8892-54e8ccc8021d".to_string(),
+            self_urn: "vessels.urn:mrn:signalk:uuid:c0d79334-4e25-4245-8892-54e8ccc8021d"
+                .to_string(),
             roles: vec!["main".to_string()],
         };
 

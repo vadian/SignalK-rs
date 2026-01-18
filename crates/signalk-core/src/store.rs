@@ -169,7 +169,7 @@ mod tests {
     fn test_new_store() {
         let store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
         assert_eq!(store.self_urn(), "urn:mrn:signalk:uuid:test-vessel");
-        
+
         // Verify initial structure
         let full = store.full_model();
         assert_eq!(full["version"], "1.7.0");
@@ -298,7 +298,9 @@ mod tests {
         store.apply_delta(&delta);
 
         // Verify intermediate objects were created
-        let value = store.get_self_path("propulsion.mainEngine.oilTemperature").unwrap();
+        let value = store
+            .get_self_path("propulsion.mainEngine.oilTemperature")
+            .unwrap();
         assert_eq!(value["value"], serde_json::json!(85.5));
     }
 
@@ -378,7 +380,9 @@ mod tests {
         let speed = store.get_self_path("navigation.speedOverGround").unwrap();
         assert_eq!(speed["value"], 3.85);
 
-        let waypoint = store.get_self_path("navigation.destination.waypoint").unwrap();
+        let waypoint = store
+            .get_self_path("navigation.destination.waypoint")
+            .unwrap();
         assert_eq!(waypoint["value"], "WP001");
     }
 

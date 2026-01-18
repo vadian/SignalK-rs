@@ -214,10 +214,7 @@ pub fn routes() -> Router<AppState> {
         .route("/devices", get(get_devices))
         .route("/devices/:uuid", put(update_device).delete(delete_device))
         .route("/access/requests", get(get_access_requests))
-        .route(
-            "/access/requests/:id/:status",
-            put(handle_access_request),
-        )
+        .route("/access/requests/:id/:status", put(handle_access_request))
 }
 
 /// Create route for /skServer/enableSecurity.
@@ -275,10 +272,7 @@ async fn update_user(
 }
 
 /// DELETE /skServer/security/users/:username
-async fn delete_user(
-    State(_state): State<AppState>,
-    Path(_username): Path<String>,
-) -> StatusCode {
+async fn delete_user(State(_state): State<AppState>, Path(_username): Path<String>) -> StatusCode {
     // TODO: Delete user
     StatusCode::OK
 }
@@ -310,10 +304,7 @@ async fn update_device(
 }
 
 /// DELETE /skServer/security/devices/:uuid
-async fn delete_device(
-    State(_state): State<AppState>,
-    Path(_uuid): Path<String>,
-) -> StatusCode {
+async fn delete_device(State(_state): State<AppState>, Path(_uuid): Path<String>) -> StatusCode {
     // TODO: Delete device
     StatusCode::OK
 }
@@ -344,10 +335,7 @@ async fn handle_access_request(
 }
 
 /// POST /skServer/enableSecurity
-async fn enable_security(
-    State(_state): State<AppState>,
-    Json(_user): Json<User>,
-) -> StatusCode {
+async fn enable_security(State(_state): State<AppState>, Json(_user): Json<User>) -> StatusCode {
     // TODO: Enable security with initial admin user
     StatusCode::OK
 }

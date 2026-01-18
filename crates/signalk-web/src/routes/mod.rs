@@ -4,13 +4,13 @@
 //! API structure for compatibility.
 
 pub mod auth;
-pub mod config;
-pub mod security;
-pub mod plugins;
 pub mod backup;
+pub mod config;
+pub mod plugins;
+pub mod security;
 
-use axum::{routing::get, Router};
 use crate::AppState;
+use axum::{routing::get, Router};
 
 /// Create the main Axum router with all routes.
 ///
@@ -22,10 +22,10 @@ pub fn create_router(_state: AppState) -> Router {
     Router::new()
         // Health check / discovery
         .route("/signalk", get(discovery_handler))
-        // TODO: Mount route submodules
-        // .nest("/signalk/v1", signalk_v1_routes(state.clone()))
-        // .nest("/skServer", server_routes(state.clone()))
-        // .nest_service("/admin", admin_static_service())
+    // TODO: Mount route submodules
+    // .nest("/signalk/v1", signalk_v1_routes(state.clone()))
+    // .nest("/skServer", server_routes(state.clone()))
+    // .nest_service("/admin", admin_static_service())
 }
 
 /// Handler for `/signalk` discovery endpoint.

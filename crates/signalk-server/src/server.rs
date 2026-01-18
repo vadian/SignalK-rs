@@ -21,8 +21,8 @@ use tracing::{debug, error, info, warn};
 
 use signalk_core::{Delta, MemoryStore, SignalKStore};
 use signalk_protocol::{
-    ClientMessage, HelloMessage, ServerMessage, Subscription, SubscribeRequest,
-    encode_server_message,
+    encode_server_message, ClientMessage, HelloMessage, ServerMessage, SubscribeRequest,
+    Subscription,
 };
 
 use crate::subscription::{ClientSubscription, SubscriptionManager};
@@ -45,7 +45,8 @@ impl Default for ServerConfig {
         Self {
             name: "signalk-server-rust".to_string(),
             version: "1.7.0".to_string(),
-            self_urn: "vessels.urn:mrn:signalk:uuid:00000000-0000-0000-0000-000000000000".to_string(),
+            self_urn: "vessels.urn:mrn:signalk:uuid:00000000-0000-0000-0000-000000000000"
+                .to_string(),
             bind_addr: "0.0.0.0:3000".parse().unwrap(),
         }
     }
@@ -128,7 +129,9 @@ impl SignalKServer {
                     let delta_rx = self.delta_tx.subscribe();
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, addr, config, store, delta_rx).await {
+                        if let Err(e) =
+                            handle_connection(stream, addr, config, store, delta_rx).await
+                        {
                             error!("Connection error from {}: {}", addr, e);
                         }
                     });
@@ -159,31 +162,32 @@ async fn handle_connection(
     let send_cached_clone = send_cached.clone();
 
     // Perform WebSocket handshake with callback to extract query params
-    let ws_stream = tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp: Response| {
-        // Extract query parameters from the URI
-        if let Some(query) = req.uri().query() {
-            for param in query.split('&') {
-                if let Some((key, value)) = param.split_once('=') {
-                    match key {
-                        "subscribe" => {
-                            if let Ok(mut mode) = subscribe_mode_clone.try_write() {
-                                *mode = value.to_string();
+    let ws_stream =
+        tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp: Response| {
+            // Extract query parameters from the URI
+            if let Some(query) = req.uri().query() {
+                for param in query.split('&') {
+                    if let Some((key, value)) = param.split_once('=') {
+                        match key {
+                            "subscribe" => {
+                                if let Ok(mut mode) = subscribe_mode_clone.try_write() {
+                                    *mode = value.to_string();
+                                }
                             }
-                        }
-                        "sendCachedValues" => {
-                            if let Ok(mut cached) = send_cached_clone.try_write() {
-                                *cached = value == "true";
+                            "sendCachedValues" => {
+                                if let Ok(mut cached) = send_cached_clone.try_write() {
+                                    *cached = value == "true";
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             }
-        }
-        Ok(resp)
-    })
-    .await?;
-    
+            Ok(resp)
+        })
+        .await?;
+
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
     // Send Hello message
@@ -199,7 +203,7 @@ async fn handle_connection(
     let subscribe_mode_value = subscribe_mode.read().await.clone();
     match subscribe_mode_value.as_str() {
         "all" => subscriptions.subscribe_all(),
-        "none" => {}, // No default subscriptions
+        "none" => {}                             // No default subscriptions
         _ => subscriptions.subscribe_self_all(), // "self" or default
     }
 

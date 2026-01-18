@@ -86,7 +86,8 @@ impl PathPattern {
     /// - `*` in middle matches exactly one segment
     pub fn new(pattern: &str) -> Result<Self, PatternError> {
         let regex_str = Self::pattern_to_regex(pattern);
-        let regex = Regex::new(&regex_str).map_err(|e| PatternError::InvalidRegex(e.to_string()))?;
+        let regex =
+            Regex::new(&regex_str).map_err(|e| PatternError::InvalidRegex(e.to_string()))?;
 
         Ok(Self {
             raw: pattern.to_string(),

@@ -13,8 +13,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 
-use signalk_server::{ServerConfig, ServerEvent, SignalKServer, Delta};
 use signalk_core::{PathValue, Update};
+use signalk_server::{Delta, ServerConfig, ServerEvent, SignalKServer};
 
 /// Find an available port for testing.
 async fn find_available_port() -> SocketAddr {
@@ -215,7 +215,9 @@ async fn test_subscription_filtering() {
     // Wait for the delta
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let msg = recv_text(&mut ws).await.expect("Should receive filtered delta");
+    let msg = recv_text(&mut ws)
+        .await
+        .expect("Should receive filtered delta");
     let received: serde_json::Value = serde_json::from_str(&msg).expect("Valid JSON");
 
     // Should only have navigation path, not environment
@@ -370,7 +372,9 @@ async fn test_put_request_returns_not_implemented() {
         .expect("Should send PUT");
 
     // Should receive failure response
-    let response = recv_text(&mut ws).await.expect("Should receive PUT response");
+    let response = recv_text(&mut ws)
+        .await
+        .expect("Should receive PUT response");
     let resp: serde_json::Value = serde_json::from_str(&response).expect("Valid JSON");
 
     assert_eq!(resp["requestId"], "test-put-123");
@@ -619,7 +623,9 @@ async fn test_complex_wildcard_pattern() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let msg = recv_text(&mut ws).await.expect("Should receive filtered delta");
+    let msg = recv_text(&mut ws)
+        .await
+        .expect("Should receive filtered delta");
     let received: serde_json::Value = serde_json::from_str(&msg).expect("Valid JSON");
 
     let values = received["updates"][0]["values"].as_array().unwrap();
@@ -1198,7 +1204,9 @@ async fn test_large_delta_message() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let msg = recv_text(&mut ws).await.expect("Should receive large delta");
+    let msg = recv_text(&mut ws)
+        .await
+        .expect("Should receive large delta");
     let received: serde_json::Value = serde_json::from_str(&msg).expect("Valid JSON");
 
     // Verify all values are present
@@ -1404,7 +1412,9 @@ async fn test_subscription_policy_instant() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let msg = recv_text(&mut ws).await.expect("Should receive delta instantly");
+    let msg = recv_text(&mut ws)
+        .await
+        .expect("Should receive delta instantly");
     let _received: serde_json::Value = serde_json::from_str(&msg).expect("Valid JSON");
 
     // Clean up
@@ -1496,13 +1506,17 @@ async fn test_concurrent_clients_independent_subscriptions() {
     let msg1 = recv_text(&mut ws1).await.expect("Client 1 delta");
     let received1: serde_json::Value = serde_json::from_str(&msg1).expect("Valid JSON");
     let values1 = received1["updates"][0]["values"].as_array().unwrap();
-    assert!(values1.iter().all(|v| v["path"].as_str().unwrap().starts_with("navigation")));
+    assert!(values1
+        .iter()
+        .all(|v| v["path"].as_str().unwrap().starts_with("navigation")));
 
     // Client 2 should only receive environment
     let msg2 = recv_text(&mut ws2).await.expect("Client 2 delta");
     let received2: serde_json::Value = serde_json::from_str(&msg2).expect("Valid JSON");
     let values2 = received2["updates"][0]["values"].as_array().unwrap();
-    assert!(values2.iter().all(|v| v["path"].as_str().unwrap().starts_with("environment")));
+    assert!(values2
+        .iter()
+        .all(|v| v["path"].as_str().unwrap().starts_with("environment")));
 
     // Clean up
     ws1.close(None).await.ok();
