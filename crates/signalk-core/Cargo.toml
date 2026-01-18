@@ -1,0 +1,16 @@
+[package]
+name = "signalk-core"
+description = "Core SignalK data model and store - runtime agnostic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = "1.4"

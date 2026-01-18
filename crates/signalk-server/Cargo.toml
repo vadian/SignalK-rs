@@ -1,0 +1,25 @@
+[package]
+name = "signalk-server"
+description = "SignalK server implementation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["tokio-runtime"]
+tokio-runtime = ["tokio", "tokio-tungstenite", "futures"]
+# esp-idf-runtime = ["esp-idf-svc", "embedded-svc"]  # Future
+
+[dependencies]
+signalk-core = { workspace = true }
+signalk-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Tokio runtime (Linux)
+tokio = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }

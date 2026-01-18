@@ -1,0 +1,21 @@
+[package]
+name = "signalk-server-esp32"
+description = "SignalK server for ESP32 (no plugin support)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "signalk-server-esp32"
+path = "src/main.rs"
+
+# Note: This crate requires ESP32 toolchain and is not built by default.
+# See README for setup instructions.
+
+[dependencies]
+signalk-core = { workspace = true }
+signalk-protocol = { workspace = true }
+# signalk-server = { workspace = true, default-features = false, features = ["esp-idf-runtime"] }
+# esp-idf-svc = "0.48"
+# esp-idf-hal = "0.43"

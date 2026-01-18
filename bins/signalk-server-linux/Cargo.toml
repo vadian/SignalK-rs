@@ -1,0 +1,22 @@
+[package]
+name = "signalk-server-linux"
+description = "SignalK server for Linux with full plugin support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "signalk-server"
+path = "src/main.rs"
+
+[dependencies]
+signalk-core = { workspace = true }
+signalk-protocol = { workspace = true }
+signalk-server = { workspace = true }
+signalk-plugins = { workspace = true }
+signalk-providers = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "signalk-protocol"
+description = "SignalK protocol message types and codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+signalk-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
