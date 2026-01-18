@@ -96,6 +96,11 @@ impl SignalKServer {
         &self.config.self_urn
     }
 
+    /// Get a reference to the data store for reading.
+    pub fn store(&self) -> Arc<RwLock<MemoryStore>> {
+        self.store.clone()
+    }
+
     /// Run the server, listening for WebSocket connections.
     pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(&self.config.bind_addr).await?;

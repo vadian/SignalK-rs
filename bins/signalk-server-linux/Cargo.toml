@@ -20,6 +20,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = { workspace = true }
+axum = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true
