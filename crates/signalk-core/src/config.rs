@@ -152,6 +152,22 @@ pub struct ServerSettings {
     /// Enable access logging.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_logging: Option<bool>,
+
+    /// Log file directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging_directory: Option<String>,
+
+    /// Keep only recent logs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_most_recent_logs_only: Option<bool>,
+
+    /// Number of log files to retain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_count_to_keep: Option<u32>,
+
+    /// Enable plugin logging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_plugin_logging: Option<bool>,
 }
 
 /// Interface enable/disable settings.
@@ -169,6 +185,12 @@ pub struct InterfaceSettings {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub appstore: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tcp: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webapps: Option<bool>,
 }
 
 /// Vessel information.

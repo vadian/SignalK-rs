@@ -43,12 +43,19 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     /// Create a new empty store with the given self vessel URN.
+    ///
+    /// The self_urn should be in the format "vessels.urn:mrn:signalk:uuid:..."
+    /// per the Signal K spec. The "self" property in the full model points to
+    /// this complete path.
     pub fn new(self_urn: &str) -> Self {
+        // Extract just the URN part (without "vessels." prefix) for the vessels object key
+        let urn_key = self_urn.strip_prefix("vessels.").unwrap_or(self_urn);
+
         let data = serde_json::json!({
             "version": "1.7.0",
-            "self": format!("vessels.{}", self_urn),
+            "self": self_urn,  // Full path like "vessels.urn:mrn:signalk:uuid:..."
             "vessels": {
-                self_urn: {}
+                urn_key: {}    // Just the URN as the key
             },
             "sources": {}
         });
@@ -61,9 +68,11 @@ impl MemoryStore {
     }
 
     /// Resolve "vessels.self" to the actual vessel URN.
+    ///
+    /// The self_urn is already in "vessels.urn:..." format, so we just return it directly.
     fn resolve_context(&self, context: &str) -> String {
         if context == "vessels.self" {
-            format!("vessels.{}", self.self_urn)
+            self.self_urn.clone()
         } else {
             context.to_string()
         }
@@ -114,15 +123,40 @@ impl MemoryStore {
 
         Some(current.clone())
     }
+
+    /// Count the number of leaf paths (values) in the store.
+    fn count_paths_recursive(value: &Value) -> usize {
+        match value {
+            Value::Object(map) => {
+                // If this object has a "value" key, it's a leaf node
+                if map.contains_key("value") {
+                    1
+                } else {
+                    map.values().map(Self::count_paths_recursive).sum()
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    /// Get the number of unique paths with values in the store.
+    pub fn path_count(&self) -> usize {
+        if let Some(vessels) = self.data.get("vessels") {
+            Self::count_paths_recursive(vessels)
+        } else {
+            0
+        }
+    }
 }
 
 impl SignalKStore for MemoryStore {
     fn apply_delta(&mut self, delta: &Delta) {
+        // Resolve context - "vessels.self" becomes the actual URN path
         let context = delta
             .context
             .as_ref()
             .map(|c| self.resolve_context(c))
-            .unwrap_or_else(|| format!("vessels.{}", self.self_urn));
+            .unwrap_or_else(|| self.self_urn.clone());
 
         for update in &delta.updates {
             for pv in &update.values {
@@ -133,6 +167,7 @@ impl SignalKStore for MemoryStore {
                     "timestamp": update.timestamp
                 });
 
+                // Store at the resolved context path (no duplicate "self" entry)
                 self.set_path_value(&context, &pv.path, value_obj);
             }
         }
@@ -143,7 +178,8 @@ impl SignalKStore for MemoryStore {
     }
 
     fn get_self_path(&self, path: &str) -> Option<Value> {
-        let full_path = format!("vessels.{}.{}", self.self_urn, path);
+        // self_urn is already "vessels.urn:...", so just append the path
+        let full_path = format!("{}.{}", self.self_urn, path);
         self.get_path_value(&full_path)
     }
 
@@ -167,20 +203,22 @@ mod tests {
 
     #[test]
     fn test_new_store() {
-        let store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
-        assert_eq!(store.self_urn(), "urn:mrn:signalk:uuid:test-vessel");
+        // self_urn must include "vessels." prefix per Signal K spec
+        let store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+        assert_eq!(store.self_urn(), "vessels.urn:mrn:signalk:uuid:test-vessel");
 
         // Verify initial structure
         let full = store.full_model();
         assert_eq!(full["version"], "1.7.0");
         assert_eq!(full["self"], "vessels.urn:mrn:signalk:uuid:test-vessel");
         assert!(full["vessels"].is_object());
+        assert!(full["vessels"]["urn:mrn:signalk:uuid:test-vessel"].is_object());
         assert!(full["sources"].is_object());
     }
 
     #[test]
     fn test_apply_delta() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -206,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_get_context() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -236,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_multiple_updates_same_path() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         // First update
         let delta1 = Delta {
@@ -279,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_nested_path_creation() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -306,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_get_path_absolute() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -333,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_get_path_nonexistent() {
-        let store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         // Query non-existent path
         let value = store.get_self_path("navigation.nonexistent");
@@ -342,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_complex_value_types() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),
@@ -388,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_null_value_handling() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         // Set a value
         let delta1 = Delta {
@@ -430,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_multiple_contexts() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         // Update self vessel
         let delta1 = Delta {
@@ -478,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_full_model_query() {
-        let mut store = MemoryStore::new("urn:mrn:signalk:uuid:test-vessel");
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
 
         let delta = Delta {
             context: Some("vessels.self".to_string()),

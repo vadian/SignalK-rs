@@ -10,63 +10,16 @@
 //! ### `GET /skServer/settings`
 //! Returns the current server settings.
 //!
-//! **Response:**
-//! ```json
-//! {
-//!   "interfaces": {
-//!     "appstore": true,
-//!     "plugins": true,
-//!     "rest": true,
-//!     "signalk-ws": true
-//!   },
-//!   "port": 3000,
-//!   "ssl": false,
-//!   "wsCompression": false,
-//!   "accessLogging": false,
-//!   "mdns": true,
-//!   "pruneContextsMinutes": 60,
-//!   "loggingDirectory": "~/.signalk/logs",
-//!   "keepMostRecentLogsOnly": true,
-//!   "logCountToKeep": 24,
-//!   "enablePluginLogging": true
-//! }
-//! ```
-//!
 //! ### `PUT /skServer/settings`
 //! Updates server settings. Server may restart if critical settings change.
-//!
-//! **Request:** Same schema as GET response.
-//!
-//! **Response:** `200 OK` on success.
 //!
 //! ## Vessel Configuration
 //!
 //! ### `GET /skServer/vessel`
 //! Returns vessel information stored in the SignalK tree.
 //!
-//! **Response:**
-//! ```json
-//! {
-//!   "name": "My Boat",
-//!   "mmsi": "123456789",
-//!   "uuid": "urn:mrn:signalk:uuid:...",
-//!   "design": {
-//!     "length": { "value": { "overall": 12.5 } },
-//!     "beam": { "value": 4.2 },
-//!     "draft": { "value": { "maximum": 1.8 } }
-//!   },
-//!   "communication": {
-//!     "callsignVhf": "WXY1234"
-//!   }
-//! }
-//! ```
-//!
 //! ### `PUT /skServer/vessel`
 //! Updates vessel configuration.
-//!
-//! **Request:** Same schema as GET response.
-//!
-//! **Response:** `200 OK` on success.
 //!
 //! # Configuration File
 //!
@@ -81,76 +34,11 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use signalk_core::{InterfaceSettings, ServerSettings, VesselInfo as CoreVesselInfo};
 
 use crate::AppState;
 
-/// Server settings matching TypeScript implementation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerSettings {
-    /// Interface enable/disable flags.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interfaces: Option<InterfaceSettings>,
-
-    /// HTTP port.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
-
-    /// HTTPS port (when SSL enabled).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sslport: Option<u16>,
-
-    /// Enable SSL/TLS.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ssl: Option<bool>,
-
-    /// Enable WebSocket compression.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ws_compression: Option<bool>,
-
-    /// Enable access logging.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_logging: Option<bool>,
-
-    /// Enable mDNS discovery.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mdns: Option<bool>,
-
-    /// Minutes before pruning inactive contexts.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prune_contexts_minutes: Option<u32>,
-
-    /// Log file directory.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logging_directory: Option<String>,
-
-    /// Keep only recent logs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub keep_most_recent_logs_only: Option<bool>,
-
-    /// Number of log files to retain.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub log_count_to_keep: Option<u32>,
-
-    /// Enable plugin logging.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_plugin_logging: Option<bool>,
-}
-
-/// Interface enable/disable settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InterfaceSettings {
-    pub appstore: Option<bool>,
-    pub plugins: Option<bool>,
-    pub rest: Option<bool>,
-    #[serde(rename = "signalk-ws")]
-    pub signalk_ws: Option<bool>,
-    pub tcp: Option<bool>,
-    pub webapps: Option<bool>,
-}
-
-/// Vessel information.
+/// Vessel information for API (includes design/communication)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VesselInfo {
@@ -203,55 +91,78 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// GET /skServer/settings
-async fn get_settings(State(_state): State<AppState>) -> Json<ServerSettings> {
-    // TODO: Load from configuration file
+async fn get_settings(State(state): State<AppState>) -> Json<ServerSettings> {
+    let settings = state.settings.read().await;
+    // Return settings with defaults filled in
     Json(ServerSettings {
-        interfaces: Some(InterfaceSettings {
+        interfaces: settings.interfaces.clone().or(Some(InterfaceSettings {
             appstore: Some(true),
             plugins: Some(true),
             rest: Some(true),
             signalk_ws: Some(true),
             tcp: Some(false),
             webapps: Some(true),
-        }),
-        port: Some(3000),
-        sslport: None,
-        ssl: Some(false),
-        ws_compression: Some(false),
-        access_logging: Some(false),
-        mdns: Some(true),
-        prune_contexts_minutes: Some(60),
-        logging_directory: Some("~/.signalk/logs".to_string()),
-        keep_most_recent_logs_only: Some(true),
-        log_count_to_keep: Some(24),
-        enable_plugin_logging: Some(true),
+        })),
+        port: settings.port.or(Some(3001)),
+        sslport: settings.sslport,
+        ssl: settings.ssl.or(Some(false)),
+        ws_compression: settings.ws_compression.or(Some(false)),
+        access_logging: settings.access_logging.or(Some(false)),
+        mdns: settings.mdns.or(Some(true)),
+        prune_contexts_minutes: settings.prune_contexts_minutes.or(Some(60)),
+        logging_directory: settings
+            .logging_directory
+            .clone()
+            .or(Some("~/.signalk/logs".to_string())),
+        keep_most_recent_logs_only: settings.keep_most_recent_logs_only.or(Some(true)),
+        log_count_to_keep: settings.log_count_to_keep.or(Some(24)),
+        enable_plugin_logging: settings.enable_plugin_logging.or(Some(true)),
     })
 }
 
 /// PUT /skServer/settings
 async fn put_settings(
-    State(_state): State<AppState>,
-    Json(_settings): Json<ServerSettings>,
+    State(state): State<AppState>,
+    Json(new_settings): Json<ServerSettings>,
 ) -> StatusCode {
-    // TODO: Save to configuration file
-    // TODO: Trigger restart if needed
+    let mut settings = state.settings.write().await;
+    *settings = new_settings;
+    // TODO: Persist to file and trigger restart if needed
     StatusCode::OK
 }
 
 /// GET /skServer/vessel
-async fn get_vessel(State(_state): State<AppState>) -> Json<VesselInfo> {
-    // TODO: Load from SignalK store
+async fn get_vessel(State(state): State<AppState>) -> Json<VesselInfo> {
+    let vessel = state.vessel_info.read().await;
     Json(VesselInfo {
-        name: Some("SignalK Vessel".to_string()),
-        mmsi: None,
-        uuid: None,
+        name: vessel.name.clone(),
+        mmsi: vessel.mmsi.clone(),
+        uuid: vessel.uuid.clone().or(Some(state.config.self_urn.clone())),
         design: None,
-        communication: None,
+        communication: vessel.callsign.clone().map(|c| VesselCommunication {
+            callsign_vhf: Some(c),
+        }),
     })
 }
 
 /// PUT /skServer/vessel
-async fn put_vessel(State(_state): State<AppState>, Json(_vessel): Json<VesselInfo>) -> StatusCode {
-    // TODO: Update SignalK store and persist
+async fn put_vessel(
+    State(state): State<AppState>,
+    Json(new_vessel): Json<VesselInfo>,
+) -> StatusCode {
+    let mut vessel = state.vessel_info.write().await;
+    if let Some(name) = new_vessel.name {
+        vessel.name = Some(name);
+    }
+    if let Some(mmsi) = new_vessel.mmsi {
+        vessel.mmsi = Some(mmsi);
+    }
+    if let Some(uuid) = new_vessel.uuid {
+        vessel.uuid = Some(uuid);
+    }
+    if let Some(callsign) = new_vessel.communication.and_then(|c| c.callsign_vhf) {
+        vessel.callsign = Some(callsign);
+    }
+    // TODO: Persist to file
     StatusCode::OK
 }

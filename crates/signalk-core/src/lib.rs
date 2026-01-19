@@ -18,7 +18,8 @@ pub mod path;
 pub mod store;
 
 pub use config::{
-    ConfigError, ConfigHandlers, ConfigStorage, SecurityConfig, ServerSettings, VesselInfo,
+    ConfigError, ConfigHandlers, ConfigStorage, InterfaceSettings, SecurityConfig, ServerSettings,
+    VesselInfo,
 };
 pub use model::*;
 pub use path::{Path, PathPattern, PatternError};

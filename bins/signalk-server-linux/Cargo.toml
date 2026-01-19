@@ -16,12 +16,14 @@ signalk-protocol = { workspace = true }
 signalk-server = { workspace = true }
 signalk-plugins = { workspace = true }
 signalk-providers = { workspace = true }
+signalk-web = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = { workspace = true }
 axum = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tower = { workspace = true }

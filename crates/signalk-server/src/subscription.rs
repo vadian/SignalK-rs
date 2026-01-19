@@ -178,21 +178,12 @@ impl SubscriptionManager {
     /// Get an initial delta with all current values matching subscriptions.
     ///
     /// This is sent when a client first connects with `sendCachedValues=true`.
-    pub fn get_initial_delta(&self, store: &MemoryStore) -> Option<Delta> {
-        // For now, return the full state for self vessel
-        // TODO: Filter based on actual subscriptions
-        let self_path = format!("{}", self.self_urn);
-
-        if let Some(vessel_data) = store.get_context(&self.self_urn) {
-            // Convert the stored JSON to delta format
-            // This is a simplified implementation
-            Some(Delta {
-                context: Some("vessels.self".to_string()),
-                updates: vec![], // TODO: Properly convert state to delta
-            })
-        } else {
-            None
-        }
+    /// Returns None if there are no cached values to send.
+    pub fn get_initial_delta(&self, _store: &MemoryStore) -> Option<Delta> {
+        // TODO: Properly convert stored state to delta format
+        // For now, return None since we don't have a proper implementation
+        // This prevents sending empty deltas on connect
+        None
     }
 }
 
