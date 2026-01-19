@@ -6,7 +6,27 @@ This document consolidates research on building a high-performance SignalK serve
 
 **Target Platform:** Linux (x86_64, ARM64 - Raspberry Pi, etc.)
 **Plugin Strategy:** Deno runtime with compatibility shim for existing JS plugins
-**Reference Implementation:** TypeScript SignalK server at `../signalk-server` (use for API compatibility verification)
+
+## Reference Materials
+
+| Resource | Location | Purpose |
+|----------|----------|---------|
+| Signal K Specification v1.7.0 | `../signalk-specification/` | Authoritative spec for data model and protocols |
+| TypeScript Reference Server | `../signalk-server/` | API compatibility verification |
+| Online Spec | https://signalk.org/specification/1.7.0/ | Latest published specification |
+| Demo Server | wss://demo.signalk.org | Live testing of message formats |
+
+### Testing Commands
+
+```bash
+# Compare WebSocket outputs
+websocat "ws://localhost:4000/signalk/v1/stream?subscribe=all"      # Rust
+websocat "ws://localhost:3000/signalk/v1/stream?subscribe=all"      # TypeScript ref
+websocat "wss://demo.signalk.org/signalk/v1/stream?subscribe=all"   # Demo
+
+# Test Admin UI Dashboard events
+websocat "ws://localhost:4000/signalk/v1/stream?serverevents=all&subscribe=none"
+```
 
 ---
 
@@ -766,26 +786,26 @@ fn main() -> Result<()> {
 
 ## 7. Implementation Phases
 
-### Phase 1: Workspace & Core Crate
+### Phase 1: Workspace & Core Crate ✅
 - [x] Create `signalk-rs` workspace with crate structure
 - [x] `signalk-core`: Data model structs (Delta, Update, Value, Source, Meta)
 - [x] `signalk-core`: Path parsing and wildcard matching
-- [x] `signalk-core`: MemoryStore implementation
-- [x] Unit tests for core functionality (12 tests passing)
+- [x] `signalk-core`: MemoryStore implementation with correct `self` URN format
+- [x] Unit tests for core functionality (23 tests passing)
 - [ ] CI setup (GitHub Actions for Linux + ESP32 cross-compile check)
 
-### Phase 2: Protocol & Server Crate (Linux/tokio first)
+### Phase 2: Protocol & Server Crate (Linux/tokio first) ✅
 - [x] `signalk-protocol`: Message types (Hello, Subscribe, Put, etc.)
 - [x] `signalk-protocol`: Codec/frame encoding-decoding logic
 - [x] `signalk-server`: WebSocket listener (tokio-tungstenite)
-- [x] Hello message on connect
+- [x] Hello message on connect (correct `self` format with `vessels.` prefix)
 - [x] Delta broadcasting to connected clients
 - [x] Basic subscription handling (`subscribe=all/none/self`)
-- [x] Integration test with WebSocket client (6 tests)
+- [x] Integration tests with WebSocket client (27 tests passing)
 
-### Phase 3: Full Subscription Management
+### Phase 3: Full Subscription Management (In Progress)
 - [x] Path pattern matching with wildcards
-- [x] Per-client subscription tracking
+- [x] Per-client subscription tracking (SubscriptionManager)
 - [ ] Policy implementation (instant/ideal/fixed)
 - [ ] Period/minPeriod throttling
 - [ ] Delta cache for `sendCachedValues=true`
@@ -831,14 +851,18 @@ fn main() -> Result<()> {
 - [ ] Systemd service integration
 - [ ] Documentation and examples
 
-### Phase 9: Admin Web UI (Linux)
-- [ ] Static file serving for Admin UI (React SPA)
-- [ ] WebSocket server events endpoint (`/signalk/v1/stream?serverevents=all`)
-- [ ] REST API: Server configuration endpoints
+### Phase 9: Admin Web UI (Linux) (In Progress)
+- [x] Static file serving for Admin UI (React SPA from TypeScript build)
+- [x] WebSocket server events endpoint (`/signalk/v1/stream?serverevents=all`)
+- [x] Server events: VESSEL_INFO, PROVIDERSTATUS, SERVERSTATISTICS
+- [x] Server events: DEBUG_SETTINGS, RECEIVE_LOGIN_STATUS, SOURCEPRIORITIES
+- [x] Real-time dashboard statistics streaming (1 Hz updates)
+- [x] REST API: Discovery endpoint (`/signalk`)
+- [x] REST API: Full data model (`/signalk/v1/api`)
+- [ ] REST API: Server configuration endpoints (`/skServer/settings`, `/skServer/vessel`)
 - [ ] REST API: Security/user management endpoints
 - [ ] REST API: Plugin management endpoints
 - [ ] REST API: Provider management endpoints
-- [ ] Real-time dashboard statistics streaming
 - [ ] Backup/restore functionality
 - [ ] Server log streaming
 

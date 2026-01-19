@@ -4,9 +4,15 @@ This document describes the architecture of the Rust SignalK server implementati
 
 ## Overview
 
-SignalK-RS is a modular implementation of the [SignalK specification](https://signalk.org/specification/1.7.0/doc/) designed for:
-- **Linux servers** - Full-featured with plugin support via Deno
+SignalK-RS is a modular implementation of the [SignalK specification v1.7.0](https://signalk.org/specification/1.7.0/doc/) designed for:
+- **Linux servers** - Full-featured with plugin support via Deno (planned)
 - **ESP32 embedded** - Lightweight, no plugins (future)
+
+## Reference Materials
+
+- **Specification**: `../signalk-specification/` - Local clone for offline reference
+- **Reference Implementation**: `../signalk-server/` - TypeScript server for API compatibility
+- **Demo Server**: wss://demo.signalk.org - Live demo for testing
 
 ## Crate Structure
 
@@ -17,11 +23,11 @@ signalk-rs/
 │   ├── signalk-protocol/    # WebSocket/REST message types
 │   ├── signalk-server/      # WebSocket server (tokio)
 │   ├── signalk-web/         # Admin UI & REST API (axum)
-│   ├── signalk-plugins/     # Deno plugin runtime
-│   └── signalk-providers/   # Data source parsers (NMEA, etc.)
+│   ├── signalk-plugins/     # Deno plugin runtime (planned)
+│   └── signalk-providers/   # Data source parsers (planned)
 │
 └── bins/
-    ├── signalk-server-linux/  # Full Linux binary
+    ├── signalk-server-linux/  # Full Linux binary (port 4000)
     └── signalk-server-esp32/  # ESP32 binary (future)
 ```
 
@@ -47,12 +53,24 @@ signalk-rs/
 - Serde-based serialization
 - Storage abstraction for cross-platform compatibility
 
+**Important: self URN Format**
+
+The `self` property must include the `vessels.` prefix per Signal K spec:
+```rust
+// Correct
+let store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:c0d79334-4e25-4245-8892-54e8ccc8021d");
+
+// The full model will have:
+// - "self": "vessels.urn:mrn:signalk:uuid:..."
+// - "vessels": { "urn:mrn:signalk:uuid:...": { ... } }  // Key WITHOUT "vessels." prefix
+```
+
 ### signalk-protocol
 
 **Purpose:** WebSocket and REST API message definitions.
 
 **Key Types:**
-- `HelloMessage` - Server identification sent on connect
+- `HelloMessage` - Server identification sent on connect (includes `self` with `vessels.` prefix)
 - `ServerMessage` - Union of all server→client messages
 - `ClientMessage` - Union of all client→server messages
 - `SubscribeRequest` / `UnsubscribeRequest` - Subscription management
@@ -68,46 +86,19 @@ signalk-rs/
 **Purpose:** WebSocket server handling connections and subscriptions.
 
 **Key Types:**
-- `SignalKServer` - Main server struct (currently bypassed in favor of direct Axum integration)
-- `ServerConfig` - Server configuration
+- `SignalKServer` - Main server struct
+- `ServerConfig` - Server configuration (includes `self_urn` with `vessels.` prefix)
 - `ServerEvent` - Events for injecting data (from providers)
-- `SubscriptionManager` - Per-client subscription state (planned)
-- `ClientSubscription` - Individual subscription with path pattern (planned)
-
-**Current Architecture (Linux):**
-The Linux implementation uses a unified Axum server on a single port (3001) that handles:
-- WebSocket connections at `/signalk/v1/stream`
-- REST API at `/signalk/v1/api`
-- Admin UI at `/admin/`
-- Discovery at `/signalk`
+- `SubscriptionManager` - Per-client subscription state
+- `ClientSubscription` - Individual subscription with path pattern
 
 **Connection Flow:**
 1. Client connects via WebSocket
-2. Server sends `HelloMessage`
-3. Client optionally sends `SubscribeRequest` (planned)
+2. Server sends `HelloMessage` with `self` property
+3. If `serverevents=all`, server sends VESSEL_INFO, PROVIDERSTATUS, etc.
 4. Server filters and broadcasts deltas based on subscriptions
-5. Client can send `PutRequest` for actions (planned)
-
-**Threading Model:**
-```
-┌─────────────────────────────────────────────────────────┐
-│                   Unified Axum Server (Port 3001)        │
-│                                                          │
-│  ┌──────────────┐    broadcast::channel    ┌──────────┐ │
-│  │ Event Loop   │ ──────────────────────── │ WS Client│ │
-│  │              │                          └──────────┘ │
-│  │ - Apply delta│    (Delta broadcast)     ┌──────────┐ │
-│  │ - Update store│ ─────────────────────── │ WS Client│ │
-│  └──────────────┘                          └──────────┘ │
-│         ▲                                      │         │
-│         │ mpsc::channel                        │         │
-│         │ (ServerEvent)                        │         │
-│  ┌──────┴───────┐                    ┌────────┴──────┐  │
-│  │   Providers  │                    │  REST API     │  │
-│  │   (Demo)     │                    │  /admin/ UI   │  │
-│  └──────────────┘                    └───────────────┘  │
-└─────────────────────────────────────────────────────────┘
-```
+5. Client can send `SubscribeRequest` / `UnsubscribeRequest`
+6. Client can send `PutRequest` for actions (planned)
 
 ### signalk-web
 
@@ -118,21 +109,31 @@ The Linux implementation uses a unified Axum server on a single port (3001) that
 - REST API routes matching TypeScript implementation
 - WebSocket server events for dashboard
 
+**Server Events (sent when `serverevents=all`):**
+
+| Event Type | Description |
+|------------|-------------|
+| `VESSEL_INFO` | Vessel name and UUID (sent once on connect) |
+| `PROVIDERSTATUS` | Provider/plugin status updates |
+| `SERVERSTATISTICS` | Delta rate, path count, client count (1 Hz) |
+| `DEBUG_SETTINGS` | Debug configuration |
+| `RECEIVE_LOGIN_STATUS` | Authentication status |
+| `SOURCEPRIORITIES` | Source priority settings |
+| `LOG` | Real-time log entries |
+
 **Route Groups:**
-- `/admin/` - Static Admin UI files
-- `/signalk/v1/` - SignalK REST API
+- `/admin/` - Static Admin UI files (React SPA)
+- `/signalk/v1/` - SignalK REST API and WebSocket
 - `/skServer/` - Server management endpoints
 
 **Key Files:**
 - `routes/auth.rs` - Authentication endpoints
 - `routes/config.rs` - Settings and vessel configuration
 - `routes/security.rs` - User and device management
-- `routes/plugins.rs` - Plugin management
-- `routes/backup.rs` - Backup/restore
-- `server_events.rs` - Real-time dashboard updates
+- `server_events.rs` - Real-time dashboard event types
 - `statistics.rs` - Performance metric collection
 
-### signalk-plugins (Future)
+### signalk-plugins (Planned)
 
 **Purpose:** Run existing SignalK JavaScript plugins via Deno.
 
@@ -157,7 +158,7 @@ The Linux implementation uses a unified Axum server on a single port (3001) that
 └─────────────────────────────────────────────────────────┘
 ```
 
-### signalk-providers (Future)
+### signalk-providers (Planned)
 
 **Purpose:** Parse data from various marine sources.
 
@@ -167,15 +168,47 @@ The Linux implementation uses a unified Axum server on a single port (3001) that
 - SignalK TCP/UDP
 - File replay
 
+## Current Architecture (Linux)
+
+The Linux implementation uses a unified Axum server on port 4000:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Unified Axum Server (Port 4000)       │
+│                                                         │
+│  ┌──────────────┐    broadcast::channel    ┌──────────┐│
+│  │ Event Loop   │ ──────────────────────── │ WS Client││
+│  │              │                          └──────────┘│
+│  │ - Apply delta│    (Delta broadcast)     ┌──────────┐│
+│  │ - Update store│ ─────────────────────── │ WS Client││
+│  └──────────────┘                          └──────────┘│
+│         ▲                                      │        │
+│         │ mpsc::channel                        │        │
+│         │ (ServerEvent)                        │        │
+│  ┌──────┴───────┐                    ┌────────┴──────┐ │
+│  │   Providers  │                    │  REST API     │ │
+│  │   (Demo)     │                    │  /admin/ UI   │ │
+│  └──────────────┘                    └───────────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Endpoints:**
+- `GET /signalk` - Discovery endpoint
+- `GET /signalk/v1/api` - Full data model
+- `GET /signalk/v1/api/*path` - Path-specific data
+- `WS /signalk/v1/stream` - WebSocket with query params
+- `GET /admin/*` - Admin UI static files
+- `GET /skServer/*` - Server management REST API
+
 ## Data Flow
 
 ### Delta Processing
 
 ```
-Provider (NMEA sentence)
+Provider (NMEA sentence or demo data)
     │
     ▼
-Parse to Delta
+Parse to Delta { context, updates }
     │
     ▼
 ServerEvent::DeltaReceived
@@ -184,11 +217,13 @@ ServerEvent::DeltaReceived
 Event Loop
     │
     ├──► MemoryStore.apply_delta()
+    │    - Resolves "vessels.self" to actual URN
+    │    - Stores under "vessels.<urn>.<path>"
     │
     └──► broadcast::send(delta)
             │
             ▼
-        Per-Client Filter
+        Per-Client Handler
             │
             ▼
         WebSocket.send()
@@ -228,37 +263,6 @@ This allows the same handler logic to work on different platforms:
 └─────────────────────┘      └─────────────────────┘
 ```
 
-**Handler Logic Pattern:**
-
-```rust
-// Framework-agnostic handler in signalk-core
-pub fn get_settings<S: ConfigStorage>(storage: &S) -> Result<ServerSettings, ConfigError> {
-    storage.load_settings()
-}
-
-// Axum wrapper in signalk-web
-async fn get_settings_route(
-    State(state): State<AppState>,
-) -> Result<Json<ServerSettings>, StatusCode> {
-    ConfigHandlers::get_settings(&state.storage)
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-// ESP32 wrapper (future)
-fn handle_get_settings(storage: &NvsStorage) -> HttpResponse {
-    match ConfigHandlers::get_settings(storage) {
-        Ok(settings) => HttpResponse::ok_json(&settings),
-        Err(_) => HttpResponse::error(500),
-    }
-}
-```
-
-This pattern enables:
-- Shared business logic across platforms
-- Platform-specific storage backends
-- Easy testing with in-memory storage
-
 ### File Structure (Compatible with TypeScript server)
 
 ```
@@ -269,36 +273,6 @@ This pattern enables:
 │   └── <plugin-id>.json
 ├── resources/             # Routes, waypoints, etc.
 └── logs/                  # Server logs
-```
-
-### settings.json Schema
-
-```json
-{
-  "interfaces": {
-    "appstore": true,
-    "plugins": true,
-    "rest": true,
-    "signalk-ws": true
-  },
-  "port": 3000,
-  "ssl": false,
-  "mdns": true,
-  "wsCompression": false,
-  "accessLogging": false,
-  "security": {
-    "strategy": "./tokensecurity"
-  },
-  "pipedProviders": [
-    {
-      "id": "nmea0183",
-      "pipeElements": [
-        { "type": "providers/serialport", "options": { "device": "/dev/ttyUSB0", "baudrate": 4800 } },
-        { "type": "providers/nmea0183-signalk" }
-      ]
-    }
-  ]
-}
 ```
 
 ## Testing
@@ -319,18 +293,38 @@ WebSocket server integration tests in `signalk-server/tests/`:
 cargo test -p signalk-server --test integration_test
 ```
 
-**Test Coverage:**
-- `test_hello_message_on_connect` - Verifies Hello message is sent on WebSocket connection
+**Test Coverage (27 tests):**
+- `test_hello_message_on_connect` - Verifies Hello message with correct `self` format
 - `test_delta_broadcast` - Verifies deltas are broadcast to connected clients
 - `test_subscription_filtering` - Verifies path-based subscription filtering
 - `test_multiple_clients` - Verifies concurrent client handling
 - `test_unsubscribe` - Verifies unsubscribe stops delta delivery
 - `test_put_request_returns_not_implemented` - Verifies PUT handling
+- And 21 more...
+
+### Comparing with Reference Implementation
+
+```bash
+# Start Rust server on port 4000
+cargo run -p signalk-server-linux
+
+# Start TypeScript reference on port 3000
+cd ../signalk-server && npm start
+
+alternatively run signalk/signalk-server docker image and expose the port
+
+# Compare outputs
+websocat "ws://localhost:4000/signalk/v1/stream?subscribe=none"
+websocat "ws://localhost:3000/signalk/v1/stream?subscribe=none"
+
+# Test server events (Dashboard query)
+websocat "ws://localhost:4000/signalk/v1/stream?serverevents=all&subscribe=none"
+```
 
 ## Performance Targets
 
 - Delta processing latency: <10ms (Rust core)
-- Plugin round-trip: <5ms (Deno IPC)
+- Plugin round-trip: <5ms (Deno IPC, planned)
 - Memory: <50MB base, scales with data
 - Connections: 100+ concurrent clients
 
