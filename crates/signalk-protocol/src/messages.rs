@@ -39,7 +39,7 @@ pub enum SubscriptionFormat {
 }
 
 /// Subscription policy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SubscriptionPolicy {
     Instant,
@@ -222,8 +222,8 @@ impl DiscoveryResponse {
             endpoints: DiscoveryEndpoints {
                 v1: DiscoveryV1 {
                     version: "1.7.0".to_string(),
-                    signalk_http: format!("http://{}:{}/signalk/v1/api", host, port),
-                    signalk_ws: format!("ws://{}:{}/signalk/v1/stream", host, port),
+                    signalk_http: format!("http://{host}:{port}/signalk/v1/api"),
+                    signalk_ws: format!("ws://{host}:{port}/signalk/v1/stream"),
                 },
             },
         }

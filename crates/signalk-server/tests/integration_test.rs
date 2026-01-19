@@ -53,7 +53,7 @@ async fn start_test_server() -> (
 
 /// Connect a WebSocket client to the given address.
 async fn connect_client(addr: SocketAddr) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
-    let url = format!("ws://{}/signalk/v1/stream", addr);
+    let url = format!("ws://{addr}/signalk/v1/stream");
     let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
         .await
         .expect("Failed to connect");
@@ -65,7 +65,7 @@ async fn connect_client_with_params(
     addr: SocketAddr,
     params: &str,
 ) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
-    let url = format!("ws://{}/signalk/v1/stream?{}", addr, params);
+    let url = format!("ws://{addr}/signalk/v1/stream?{params}");
     let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
         .await
         .expect("Failed to connect");
@@ -1181,7 +1181,7 @@ async fn test_large_delta_message() {
     let mut values = Vec::new();
     for i in 0..100 {
         values.push(PathValue {
-            path: format!("sensors.temperature.{}", i),
+            path: format!("sensors.temperature.{i}"),
             value: serde_json::json!(20.0 + i as f64 * 0.1),
         });
     }
@@ -1235,7 +1235,7 @@ async fn test_rapid_delta_stream() {
             updates: vec![Update {
                 source_ref: Some("test".to_string()),
                 source: None,
-                timestamp: Some(format!("2024-01-17T12:00:{:02}.000Z", i)),
+                timestamp: Some(format!("2024-01-17T12:00:{i:02}.000Z")),
                 values: vec![PathValue {
                     path: "navigation.speedOverGround".to_string(),
                     value: serde_json::json!(5.0 + i as f64 * 0.1),
@@ -1521,5 +1521,110 @@ async fn test_concurrent_clients_independent_subscriptions() {
     // Clean up
     ws1.close(None).await.ok();
     ws2.close(None).await.ok();
+    handle.abort();
+}
+
+/// Test that inconsistent subscription parameters generate warning messages.
+/// Based on reference implementation behavior in signalk-server/test/subscriptions.js
+#[tokio::test]
+async fn test_subscription_policy_warning_minperiod_with_non_instant() {
+    let (addr, event_tx, handle) = start_test_server().await;
+
+    let mut ws = connect_client(addr).await;
+
+    // Skip Hello
+    let _ = recv_text(&mut ws).await.expect("Hello");
+
+    // First send some data so the subscription manager has something to work with
+    let delta = Delta {
+        context: Some("vessels.self".to_string()),
+        updates: vec![Update {
+            source_ref: Some("test".to_string()),
+            source: None,
+            timestamp: Some("2024-01-17T12:00:00.000Z".to_string()),
+            values: vec![PathValue {
+                path: "navigation.courseOverGroundTrue".to_string(),
+                value: serde_json::json!(172.9),
+            }],
+            meta: None,
+        }],
+    };
+
+    event_tx
+        .send(ServerEvent::DeltaReceived(delta))
+        .await
+        .expect("Should send delta");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Skip the delta broadcast
+    let _ = recv_text(&mut ws).await.ok();
+
+    // Subscribe with minPeriod and a non-instant policy (ideal)
+    // This is an inconsistent request - minPeriod implies instant policy
+    let subscribe = serde_json::json!({
+        "context": "*",
+        "subscribe": [{
+            "path": "navigation.courseOverGroundTrue",
+            "policy": "ideal",
+            "minPeriod": 500
+        }]
+    });
+
+    ws.send(Message::Text(subscribe.to_string()))
+        .await
+        .expect("Should send subscribe");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Should receive a warning message about the inconsistent parameters
+    let response = recv_text(&mut ws).await.expect("Should receive warning");
+
+    // The warning message should mention minPeriod and instant policy
+    assert!(
+        response.contains("minPeriod assumes policy 'instant'"),
+        "Expected warning about minPeriod, got: {response}"
+    );
+
+    // Clean up
+    ws.close(None).await.ok();
+    handle.abort();
+}
+
+/// Test that period with non-fixed policy generates a warning.
+#[tokio::test]
+async fn test_subscription_policy_warning_period_with_non_fixed() {
+    let (addr, _event_tx, handle) = start_test_server().await;
+
+    let mut ws = connect_client(addr).await;
+
+    // Skip Hello
+    let _ = recv_text(&mut ws).await.expect("Hello");
+
+    // Subscribe with period and instant policy (should be 'fixed' for period)
+    let subscribe = serde_json::json!({
+        "context": "vessels.self",
+        "subscribe": [{
+            "path": "navigation.*",
+            "policy": "instant",
+            "period": 1000
+        }]
+    });
+
+    ws.send(Message::Text(subscribe.to_string()))
+        .await
+        .expect("Should send subscribe");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Should receive a warning about period assuming fixed policy
+    let response = recv_text(&mut ws).await.expect("Should receive warning");
+    assert!(
+        response.contains("period assumes policy 'fixed'"),
+        "Expected warning about period, got: {response}"
+    );
+
+    // Clean up
+    ws.close(None).await.ok();
     handle.abort();
 }

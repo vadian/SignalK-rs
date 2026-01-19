@@ -255,7 +255,7 @@ async fn post_access_request(
     // TODO: Create pending access request
     let request_id = uuid::Uuid::new_v4().to_string();
     Json(AccessRequestResponse {
-        href: format!("/signalk/v1/requests/{}", request_id),
+        href: format!("/signalk/v1/requests/{request_id}"),
         request_id,
     })
 }

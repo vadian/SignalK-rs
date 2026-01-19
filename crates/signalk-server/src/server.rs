@@ -290,7 +290,15 @@ async fn handle_client_message(
     match msg {
         ClientMessage::Subscribe(req) => {
             debug!("Client subscribed to {:?}", req.subscribe);
-            subscriptions.add_subscriptions(&req.context, &req.subscribe);
+            let warnings = subscriptions.add_subscriptions(&req.context, &req.subscribe);
+
+            // Send any warning messages back to the client
+            for warning in warnings {
+                warn!("Subscription warning: {}", warning);
+                // Send as a plain text message (matching reference implementation behavior)
+                let warning_json = serde_json::to_string(&warning)?;
+                ws_tx.send(Message::Text(warning_json)).await?;
+            }
         }
         ClientMessage::Unsubscribe(req) => {
             debug!("Client unsubscribed from {:?}", req.unsubscribe);

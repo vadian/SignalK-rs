@@ -101,11 +101,43 @@ impl SubscriptionManager {
     }
 
     /// Add subscriptions from a subscribe request.
-    pub fn add_subscriptions(&mut self, context: &str, subs: &[Subscription]) {
+    ///
+    /// Returns a list of warning messages for inconsistent subscription parameters
+    /// (e.g., minPeriod with non-instant policy).
+    pub fn add_subscriptions(&mut self, context: &str, subs: &[Subscription]) -> Vec<String> {
+        let mut warnings = Vec::new();
+
         for sub in subs {
+            // Check for inconsistent subscription parameters
+            if let Some(min_period) = sub.min_period {
+                if min_period > 0 {
+                    if let Some(ref policy) = sub.policy {
+                        if *policy != SubscriptionPolicy::Instant {
+                            warnings.push(format!(
+                                "minPeriod assumes policy 'instant', ignoring policy {policy:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if let Some(period) = sub.period {
+                if period > 0 && sub.min_period.is_none() {
+                    if let Some(ref policy) = sub.policy {
+                        if *policy != SubscriptionPolicy::Fixed {
+                            warnings.push(format!(
+                                "period assumes policy 'fixed', ignoring policy {policy:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+
             self.subscriptions
                 .push(ClientSubscription::from_protocol(context, sub));
         }
+
+        warnings
     }
 
     /// Remove a subscription by context and path.
@@ -179,11 +211,108 @@ impl SubscriptionManager {
     ///
     /// This is sent when a client first connects with `sendCachedValues=true`.
     /// Returns None if there are no cached values to send.
-    pub fn get_initial_delta(&self, _store: &MemoryStore) -> Option<Delta> {
-        // TODO: Properly convert stored state to delta format
-        // For now, return None since we don't have a proper implementation
-        // This prevents sending empty deltas on connect
-        None
+    pub fn get_initial_delta(&self, store: &MemoryStore) -> Option<Delta> {
+        if self.subscriptions.is_empty() {
+            return None;
+        }
+
+        // Collect values from the store that match our subscriptions
+        let mut path_values = Vec::new();
+        let mut source_ref: Option<String> = None;
+        let mut timestamp: Option<String> = None;
+
+        // Get the self vessel data from the store
+        let self_urn = store.self_urn();
+        let urn_key = self_urn.strip_prefix("vessels.").unwrap_or(self_urn);
+
+        if let Some(vessel_data) = store
+            .full_model()
+            .get("vessels")
+            .and_then(|v| v.get(urn_key))
+        {
+            self.collect_matching_paths(
+                vessel_data,
+                "",
+                "vessels.self",
+                &mut path_values,
+                &mut source_ref,
+                &mut timestamp,
+            );
+        }
+
+        if path_values.is_empty() {
+            return None;
+        }
+
+        Some(Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref,
+                source: None,
+                timestamp,
+                values: path_values,
+                meta: None,
+            }],
+        })
+    }
+
+    /// Recursively collect paths and values from a JSON object that match subscriptions.
+    fn collect_matching_paths(
+        &self,
+        value: &serde_json::Value,
+        current_path: &str,
+        context: &str,
+        path_values: &mut Vec<PathValue>,
+        source_ref: &mut Option<String>,
+        timestamp: &mut Option<String>,
+    ) {
+        if let serde_json::Value::Object(map) = value {
+            // Check if this is a leaf value node (has "value" key)
+            if map.contains_key("value") {
+                // This is a SignalK value node
+                if self.matches(context, current_path) {
+                    path_values.push(PathValue {
+                        path: current_path.to_string(),
+                        value: map.get("value").cloned().unwrap_or(serde_json::Value::Null),
+                    });
+
+                    // Capture source and timestamp from the first matching value
+                    if source_ref.is_none() {
+                        if let Some(src) = map.get("$source").and_then(|s| s.as_str()) {
+                            *source_ref = Some(src.to_string());
+                        }
+                    }
+                    if timestamp.is_none() {
+                        if let Some(ts) = map.get("timestamp").and_then(|t| t.as_str()) {
+                            *timestamp = Some(ts.to_string());
+                        }
+                    }
+                }
+            } else {
+                // Recurse into child objects
+                for (key, child) in map {
+                    // Skip "values" map - we only want the primary value
+                    if key == "values" {
+                        continue;
+                    }
+
+                    let child_path = if current_path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{current_path}.{key}")
+                    };
+
+                    self.collect_matching_paths(
+                        child,
+                        &child_path,
+                        context,
+                        path_values,
+                        source_ref,
+                        timestamp,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -496,5 +625,206 @@ mod tests {
         // Should only have one update (navigation)
         assert_eq!(filtered.updates.len(), 1);
         assert_eq!(filtered.updates[0].source_ref, Some("gps".to_string()));
+    }
+
+    // ============================================================
+    // Tests for get_initial_delta (sendCachedValues support)
+    // ============================================================
+
+    #[test]
+    fn test_get_initial_delta_empty_store() {
+        let store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test");
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.subscribe_self_all();
+
+        // Empty store should return None
+        let initial = mgr.get_initial_delta(&store);
+        assert!(initial.is_none());
+    }
+
+    #[test]
+    fn test_get_initial_delta_no_subscriptions() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test");
+        let mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+
+        // Add some data to the store
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.5),
+                }],
+                meta: None,
+            }],
+        };
+        store.apply_delta(&delta);
+
+        // No subscriptions should return None
+        let initial = mgr.get_initial_delta(&store);
+        assert!(initial.is_none());
+    }
+
+    #[test]
+    fn test_get_initial_delta_with_data() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test");
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.subscribe_self_all();
+
+        // Add data to the store
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps".to_string()),
+                source: None,
+                timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.5),
+                }],
+                meta: None,
+            }],
+        };
+        store.apply_delta(&delta);
+
+        // Should get initial delta with the stored value
+        let initial = mgr.get_initial_delta(&store).unwrap();
+        assert_eq!(initial.context, Some("vessels.self".to_string()));
+        assert_eq!(initial.updates.len(), 1);
+
+        // Find the navigation.speedOverGround value
+        let values = &initial.updates[0].values;
+        let speed_value = values
+            .iter()
+            .find(|pv| pv.path == "navigation.speedOverGround");
+        assert!(speed_value.is_some());
+        assert_eq!(speed_value.unwrap().value, serde_json::json!(3.5));
+    }
+
+    #[test]
+    fn test_get_initial_delta_filters_by_subscription() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test");
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+
+        // Only subscribe to navigation paths
+        mgr.add_subscriptions(
+            "vessels.self",
+            &[Subscription {
+                path: "navigation.*".to_string(),
+                period: None,
+                format: None,
+                policy: None,
+                min_period: None,
+            }],
+        );
+
+        // Add data to multiple paths
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                values: vec![
+                    PathValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: serde_json::json!(3.5),
+                    },
+                    PathValue {
+                        path: "environment.wind.speedApparent".to_string(),
+                        value: serde_json::json!(10.0),
+                    },
+                ],
+                meta: None,
+            }],
+        };
+        store.apply_delta(&delta);
+
+        // Should only get navigation paths
+        let initial = mgr.get_initial_delta(&store).unwrap();
+        let paths: Vec<&str> = initial.updates[0]
+            .values
+            .iter()
+            .map(|pv| pv.path.as_str())
+            .collect();
+
+        assert!(paths.contains(&"navigation.speedOverGround"));
+        assert!(!paths.contains(&"environment.wind.speedApparent"));
+    }
+
+    #[test]
+    fn test_get_initial_delta_preserves_source_and_timestamp() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test");
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.subscribe_self_all();
+
+        // Add data with specific source and timestamp
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("nmea0183.GP".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:30:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.5),
+                }],
+                meta: None,
+            }],
+        };
+        store.apply_delta(&delta);
+
+        let initial = mgr.get_initial_delta(&store).unwrap();
+
+        // Source and timestamp should be captured
+        assert_eq!(
+            initial.updates[0].source_ref,
+            Some("nmea0183.GP".to_string())
+        );
+        assert_eq!(
+            initial.updates[0].timestamp,
+            Some("2024-01-17T10:30:00.000Z".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_initial_delta_multiple_paths() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test");
+        let mut mgr = SubscriptionManager::new("vessels.urn:mrn:signalk:uuid:test");
+        mgr.subscribe_self_all();
+
+        // Add multiple paths
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("test".to_string()),
+                source: None,
+                timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                values: vec![
+                    PathValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: serde_json::json!(3.5),
+                    },
+                    PathValue {
+                        path: "navigation.courseOverGroundTrue".to_string(),
+                        value: serde_json::json!(1.52),
+                    },
+                    PathValue {
+                        path: "environment.wind.speedApparent".to_string(),
+                        value: serde_json::json!(10.0),
+                    },
+                ],
+                meta: None,
+            }],
+        };
+        store.apply_delta(&delta);
+
+        let initial = mgr.get_initial_delta(&store).unwrap();
+
+        // Should contain all three paths
+        assert_eq!(initial.updates[0].values.len(), 3);
     }
 }

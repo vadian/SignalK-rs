@@ -2,8 +2,37 @@
 //!
 //! The store maintains the current state of all SignalK data and provides
 //! methods for querying and updating it.
+//!
+//! ## Multi-Source Value Storage
+//!
+//! Per the Signal K specification, when multiple sources provide data for the
+//! same path, the store maintains:
+//! - A primary `value` and `$source` (the most recent update)
+//! - A `values` object containing all source values keyed by source ID
+//!
+//! Example structure:
+//! ```json
+//! {
+//!   "navigation": {
+//!     "speedOverGround": {
+//!       "value": 3.85,
+//!       "$source": "nmea0183.GP",
+//!       "timestamp": "2024-01-17T10:30:00.000Z",
+//!       "values": {
+//!         "nmea0183.GP": { "value": 3.85, "timestamp": "2024-01-17T10:30:00.000Z" },
+//!         "nmea2000.115": { "value": 3.82, "timestamp": "2024-01-17T10:29:59.000Z" }
+//!       }
+//!     }
+//!   }
+//! }
+//! ```
+//!
+//! ## Sources Hierarchy
+//!
+//! The store also maintains a `/sources` tree that tracks all data sources
+//! that have provided data. This is populated automatically from delta messages.
 
-use crate::model::{Delta, PathValue, Update};
+use crate::model::{Delta, PathValue, Source, Update};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -26,6 +55,9 @@ pub trait SignalKStore: Send + Sync {
 
     /// Get the full data model as JSON.
     fn full_model(&self) -> &Value;
+
+    /// Get all sources that have provided data.
+    fn get_sources(&self) -> Option<Value>;
 }
 
 /// In-memory SignalK store implementation.
@@ -79,11 +111,12 @@ impl MemoryStore {
     }
 
     /// Set a value at a path, creating intermediate objects as needed.
+    /// This is the low-level setter that doesn't handle multi-source values.
     fn set_path_value(&mut self, base_path: &str, path: &str, value: Value) {
         let full_path = if path.is_empty() {
             base_path.to_string()
         } else {
-            format!("{}.{}", base_path, path)
+            format!("{base_path}.{path}")
         };
 
         let segments: Vec<&str> = full_path.split('.').collect();
@@ -102,6 +135,140 @@ impl MemoryStore {
                         map.insert(segment.to_string(), serde_json::json!({}));
                     }
                     current = map.get_mut(*segment).unwrap();
+                }
+            }
+        }
+    }
+
+    /// Set a SignalK value at a path with multi-source support.
+    ///
+    /// This method:
+    /// 1. Updates the primary value and $source
+    /// 2. Stores the source-specific value in the `values` map
+    /// 3. Preserves existing values from other sources
+    fn set_signalk_value(
+        &mut self,
+        base_path: &str,
+        path: &str,
+        value: &Value,
+        source_ref: Option<&str>,
+        timestamp: Option<&str>,
+    ) {
+        let full_path = if path.is_empty() {
+            base_path.to_string()
+        } else {
+            format!("{base_path}.{path}")
+        };
+
+        let segments: Vec<&str> = full_path.split('.').collect();
+        let mut current = &mut self.data;
+
+        // Navigate to the parent of the leaf node
+        for (i, segment) in segments.iter().enumerate() {
+            if i == segments.len() - 1 {
+                // Last segment: handle SignalK value structure
+                if let Value::Object(map) = current {
+                    let existing = map.get(*segment);
+
+                    // Build the new value object
+                    let mut value_obj = serde_json::json!({
+                        "value": value
+                    });
+
+                    if let Some(src) = source_ref {
+                        value_obj["$source"] = Value::String(src.to_string());
+                    }
+
+                    if let Some(ts) = timestamp {
+                        value_obj["timestamp"] = Value::String(ts.to_string());
+                    }
+
+                    // Handle the `values` map for multi-source support
+                    if let Some(src) = source_ref {
+                        // Create source-specific entry
+                        let source_entry = serde_json::json!({
+                            "value": value,
+                            "timestamp": timestamp
+                        });
+
+                        // Preserve existing values map or create new one
+                        let mut values_map = if let Some(existing_val) = existing {
+                            if let Some(existing_values) = existing_val.get("values") {
+                                existing_values.clone()
+                            } else {
+                                serde_json::json!({})
+                            }
+                        } else {
+                            serde_json::json!({})
+                        };
+
+                        // Add/update this source's entry
+                        if let Value::Object(vm) = &mut values_map {
+                            vm.insert(src.to_string(), source_entry);
+                        }
+
+                        value_obj["values"] = values_map;
+                    }
+
+                    map.insert(segment.to_string(), value_obj);
+                }
+            } else {
+                // Intermediate segment: ensure object exists
+                if let Value::Object(map) = current {
+                    if !map.contains_key(*segment) {
+                        map.insert(segment.to_string(), serde_json::json!({}));
+                    }
+                    current = map.get_mut(*segment).unwrap();
+                }
+            }
+        }
+    }
+
+    /// Register a source in the /sources hierarchy.
+    fn register_source(&mut self, source_ref: Option<&str>, source: Option<&Source>) {
+        // Get or create source label
+        let label = if let Some(src_ref) = source_ref {
+            // $source format is usually "label.qualifier" (e.g., "nmea0183.GP", "n2k.115")
+            // Extract the label part (before the dot) or use the whole string
+            src_ref.split('.').next().unwrap_or(src_ref).to_string()
+        } else if let Some(src) = source {
+            src.label.clone()
+        } else {
+            return; // No source info to register
+        };
+
+        // Get or create the /sources object
+        if let Value::Object(data) = &mut self.data {
+            let sources = data
+                .entry("sources")
+                .or_insert_with(|| serde_json::json!({}));
+
+            if let Value::Object(sources_map) = sources {
+                // Create or update the source entry
+                if !sources_map.contains_key(&label) {
+                    let mut source_entry = serde_json::json!({});
+
+                    // If we have a full Source object, populate more details
+                    if let Some(src) = source {
+                        if let Some(t) = &src.source_type {
+                            source_entry["type"] = Value::String(t.clone());
+                        }
+                    }
+
+                    sources_map.insert(label.clone(), source_entry);
+                }
+
+                // If there's a sub-source (e.g., "115" from "n2k.115"), register it
+                if let Some(src_ref) = source_ref {
+                    let parts: Vec<&str> = src_ref.split('.').collect();
+                    if parts.len() > 1 {
+                        let sub_source = parts[1..].join(".");
+                        if let Some(Value::Object(label_entry)) = sources_map.get_mut(&label) {
+                            label_entry
+                                .entry(&sub_source)
+                                .or_insert_with(|| serde_json::json!({}));
+                        }
+                    }
                 }
             }
         }
@@ -159,16 +326,18 @@ impl SignalKStore for MemoryStore {
             .unwrap_or_else(|| self.self_urn.clone());
 
         for update in &delta.updates {
-            for pv in &update.values {
-                // Store the value with metadata wrapper
-                let value_obj = serde_json::json!({
-                    "value": pv.value,
-                    "$source": update.source_ref,
-                    "timestamp": update.timestamp
-                });
+            // Register the source in the /sources hierarchy
+            self.register_source(update.source_ref.as_deref(), update.source.as_ref());
 
-                // Store at the resolved context path (no duplicate "self" entry)
-                self.set_path_value(&context, &pv.path, value_obj);
+            for pv in &update.values {
+                // Store the value with multi-source support
+                self.set_signalk_value(
+                    &context,
+                    &pv.path,
+                    &pv.value,
+                    update.source_ref.as_deref(),
+                    update.timestamp.as_deref(),
+                );
             }
         }
     }
@@ -194,6 +363,10 @@ impl SignalKStore for MemoryStore {
 
     fn full_model(&self) -> &Value {
         &self.data
+    }
+
+    fn get_sources(&self) -> Option<Value> {
+        self.data.get("sources").cloned()
     }
 }
 
@@ -544,5 +717,350 @@ mod tests {
         assert_eq!(model["version"], "1.7.0");
         assert!(model["vessels"]["urn:mrn:signalk:uuid:test-vessel"]["navigation"].is_object());
         assert!(model["vessels"]["urn:mrn:signalk:uuid:test-vessel"]["environment"].is_object());
+    }
+
+    // ============================================================
+    // Multi-source value tests (matching reference implementation)
+    // ============================================================
+
+    #[test]
+    fn test_multi_source_values_same_path() {
+        // Test based on signalk-server/test/multiple-values.js
+        // When multiple sources update the same path, all values should be stored
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        // First source provides a value
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("source1.115".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.trip.log".to_string(),
+                    value: serde_json::json!(1),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+
+        // Verify first value
+        let value = store.get_self_path("navigation.trip.log").unwrap();
+        assert_eq!(value["value"], serde_json::json!(1));
+        assert_eq!(value["$source"], "source1.115");
+
+        // Second source provides a different value for same path
+        let delta2 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("source2.116".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:01.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.trip.log".to_string(),
+                    value: serde_json::json!(2),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta2);
+
+        // Verify the primary value is from the most recent source
+        let value = store.get_self_path("navigation.trip.log").unwrap();
+        assert_eq!(value["value"], serde_json::json!(2));
+        assert_eq!(value["$source"], "source2.116");
+
+        // Verify both sources are stored in the values map
+        assert!(value["values"].is_object());
+        assert_eq!(
+            value["values"]["source1.115"]["value"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            value["values"]["source2.116"]["value"],
+            serde_json::json!(2)
+        );
+    }
+
+    #[test]
+    fn test_multi_source_preserves_timestamps() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps1".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        let delta2 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps2".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:01.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.90),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+        store.apply_delta(&delta2);
+
+        let value = store.get_self_path("navigation.speedOverGround").unwrap();
+
+        // Check timestamps are preserved per source
+        assert_eq!(
+            value["values"]["gps1"]["timestamp"],
+            "2024-01-17T10:00:00.000Z"
+        );
+        assert_eq!(
+            value["values"]["gps2"]["timestamp"],
+            "2024-01-17T10:00:01.000Z"
+        );
+    }
+
+    #[test]
+    fn test_same_source_updates_value() {
+        // When the same source updates a path, it should replace its own value
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps1".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        let delta2 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps1".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:01.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(4.00),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+        store.apply_delta(&delta2);
+
+        let value = store.get_self_path("navigation.speedOverGround").unwrap();
+
+        // Primary value should be updated
+        assert_eq!(value["value"], serde_json::json!(4.00));
+
+        // Only one source should be in the values map
+        let values_map = value["values"].as_object().unwrap();
+        assert_eq!(values_map.len(), 1);
+        assert_eq!(value["values"]["gps1"]["value"], serde_json::json!(4.00));
+    }
+
+    // ============================================================
+    // Sources hierarchy tests
+    // ============================================================
+
+    #[test]
+    fn test_sources_populated_from_source_ref() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("nmea0183.GP".to_string()),
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta);
+
+        // Check sources hierarchy
+        let sources = store.get_sources().unwrap();
+        assert!(sources["nmea0183"].is_object());
+        assert!(sources["nmea0183"]["GP"].is_object());
+    }
+
+    #[test]
+    fn test_sources_populated_from_multiple_providers() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        // NMEA 0183 source
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("nmea0183.GP".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        // NMEA 2000 source
+        let delta2 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("n2k.115".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.courseOverGroundTrue".to_string(),
+                    value: serde_json::json!(1.52),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+        store.apply_delta(&delta2);
+
+        let sources = store.get_sources().unwrap();
+
+        // Both source labels should exist
+        assert!(sources["nmea0183"].is_object());
+        assert!(sources["n2k"].is_object());
+
+        // Sub-sources should exist
+        assert!(sources["nmea0183"]["GP"].is_object());
+        assert!(sources["n2k"]["115"].is_object());
+    }
+
+    #[test]
+    fn test_sources_with_embedded_source_object() {
+        use crate::model::Source;
+
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: None,
+                source: Some(Source {
+                    label: "actisense".to_string(),
+                    source_type: Some("NMEA2000".to_string()),
+                    src: Some("115".to_string()),
+                    can_name: None,
+                    pgn: Some(128267),
+                    sentence: None,
+                    talker: None,
+                    ais_type: None,
+                }),
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta);
+
+        let sources = store.get_sources().unwrap();
+
+        // Source label should be created
+        assert!(sources["actisense"].is_object());
+        // Type should be captured
+        assert_eq!(sources["actisense"]["type"], "NMEA2000");
+    }
+
+    #[test]
+    fn test_path_count_with_multi_source() {
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        // Two sources updating the same path should still count as one path
+        let delta1 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps1".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        let delta2 = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("gps2".to_string()),
+                source: None,
+                timestamp: None,
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.90),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta1);
+        store.apply_delta(&delta2);
+
+        // Should count as only 1 path, not 2
+        assert_eq!(store.path_count(), 1);
+    }
+
+    #[test]
+    fn test_no_source_provided() {
+        // When no source is provided, value should still be stored
+        let mut store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:test-vessel");
+
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: None,
+                source: None,
+                timestamp: Some("2024-01-17T10:00:00.000Z".to_string()),
+                values: vec![PathValue {
+                    path: "navigation.speedOverGround".to_string(),
+                    value: serde_json::json!(3.85),
+                }],
+                meta: None,
+            }],
+        };
+
+        store.apply_delta(&delta);
+
+        let value = store.get_self_path("navigation.speedOverGround").unwrap();
+        assert_eq!(value["value"], serde_json::json!(3.85));
+        // $source should not be present when no source provided
+        assert!(value.get("$source").is_none() || value["$source"].is_null());
     }
 }

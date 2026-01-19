@@ -65,6 +65,40 @@ let store = MemoryStore::new("vessels.urn:mrn:signalk:uuid:c0d79334-4e25-4245-88
 // - "vessels": { "urn:mrn:signalk:uuid:...": { ... } }  // Key WITHOUT "vessels." prefix
 ```
 
+**Multi-Source Value Storage:**
+
+When multiple sources provide data for the same path, the store maintains all values:
+
+```json
+{
+  "navigation": {
+    "speedOverGround": {
+      "value": 3.85,           // Primary value (most recent)
+      "$source": "nmea0183.GP", // Primary source
+      "timestamp": "2024-01-17T10:30:00.000Z",
+      "values": {              // All source values
+        "nmea0183.GP": { "value": 3.85, "timestamp": "2024-01-17T10:30:00.000Z" },
+        "nmea2000.115": { "value": 3.82, "timestamp": "2024-01-17T10:29:59.000Z" }
+      }
+    }
+  }
+}
+```
+
+**Sources Hierarchy:**
+
+The `/sources` tree is automatically populated from delta messages:
+
+```json
+{
+  "sources": {
+    "nmea0183": { "GP": {} },
+    "nmea2000": { "115": {}, "127": {} },
+    "actisense": { "type": "NMEA2000" }
+  }
+}
+```
+
 ### signalk-protocol
 
 **Purpose:** WebSocket and REST API message definitions.
@@ -293,14 +327,22 @@ WebSocket server integration tests in `signalk-server/tests/`:
 cargo test -p signalk-server --test integration_test
 ```
 
-**Test Coverage (27 tests):**
+**Test Coverage (89 total tests):**
+
+| Crate | Tests | Description |
+|-------|-------|-------------|
+| signalk-core | 31 | Data model, store operations, multi-source values, sources hierarchy |
+| signalk-protocol | 9 | Message serialization/deserialization |
+| signalk-server | 47 | Unit tests + integration tests (WebSocket, subscriptions, delta caching) |
+| signalk-web | 2 | Statistics collection, client tracking |
+
+**Key Integration Tests:**
 - `test_hello_message_on_connect` - Verifies Hello message with correct `self` format
 - `test_delta_broadcast` - Verifies deltas are broadcast to connected clients
 - `test_subscription_filtering` - Verifies path-based subscription filtering
-- `test_multiple_clients` - Verifies concurrent client handling
-- `test_unsubscribe` - Verifies unsubscribe stops delta delivery
-- `test_put_request_returns_not_implemented` - Verifies PUT handling
-- And 21 more...
+- `test_multiple_sources_same_path` - Verifies multi-source value storage
+- `test_initial_cached_values` - Verifies sendCachedValues=true functionality
+- `test_subscription_policy_warning_*` - Verifies policy validation warnings
 
 ### Comparing with Reference Implementation
 

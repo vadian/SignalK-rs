@@ -791,7 +791,7 @@ fn main() -> Result<()> {
 - [x] `signalk-core`: Data model structs (Delta, Update, Value, Source, Meta)
 - [x] `signalk-core`: Path parsing and wildcard matching
 - [x] `signalk-core`: MemoryStore implementation with correct `self` URN format
-- [x] Unit tests for core functionality (23 tests passing)
+- [x] Unit tests for core functionality (31 tests passing)
 - [ ] CI setup (GitHub Actions for Linux + ESP32 cross-compile check)
 
 ### Phase 2: Protocol & Server Crate (Linux/tokio first) ✅
@@ -801,16 +801,17 @@ fn main() -> Result<()> {
 - [x] Hello message on connect (correct `self` format with `vessels.` prefix)
 - [x] Delta broadcasting to connected clients
 - [x] Basic subscription handling (`subscribe=all/none/self`)
-- [x] Integration tests with WebSocket client (27 tests passing)
+- [x] Integration tests with WebSocket client (29 tests passing)
 
-### Phase 3: Full Subscription Management (In Progress)
+### Phase 3: Full Subscription Management ✅
 - [x] Path pattern matching with wildcards
 - [x] Per-client subscription tracking (SubscriptionManager)
-- [ ] Policy implementation (instant/ideal/fixed)
-- [ ] Period/minPeriod throttling
-- [ ] Delta cache for `sendCachedValues=true`
-- [ ] Sources hierarchy population (build `/sources` tree from deltas)
-- [ ] Multiple value storage (store all sources per path in `.values` map)
+- [x] Multiple value storage (store all sources per path in `.values` map)
+- [x] Sources hierarchy population (build `/sources` tree from deltas)
+- [x] Delta cache for `sendCachedValues=true` (get_initial_delta implementation)
+- [x] Policy validation warnings (minPeriod implies instant, period implies fixed)
+- [ ] Period/minPeriod throttling (parameters accepted, enforcement deferred)
+- [ ] Policy implementation (instant works, ideal/fixed deferred)
 
 ### Phase 4: ESP32 Port (Parallel Track)
 - [ ] `signalk-server`: Add `esp-idf-runtime` feature

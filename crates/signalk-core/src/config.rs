@@ -29,11 +29,11 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::NotFound(key) => write!(f, "Configuration not found: {}", key),
-            ConfigError::ReadError(msg) => write!(f, "Read error: {}", msg),
-            ConfigError::WriteError(msg) => write!(f, "Write error: {}", msg),
-            ConfigError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
-            ConfigError::StorageUnavailable(msg) => write!(f, "Storage unavailable: {}", msg),
+            ConfigError::NotFound(key) => write!(f, "Configuration not found: {key}"),
+            ConfigError::ReadError(msg) => write!(f, "Read error: {msg}"),
+            ConfigError::WriteError(msg) => write!(f, "Write error: {msg}"),
+            ConfigError::InvalidData(msg) => write!(f, "Invalid data: {msg}"),
+            ConfigError::StorageUnavailable(msg) => write!(f, "Storage unavailable: {msg}"),
         }
     }
 }
@@ -379,7 +379,7 @@ mod tests {
         }
 
         fn load_plugin_config(&self, plugin_id: &str) -> Result<serde_json::Value, ConfigError> {
-            self.load_value(&format!("plugin:{}", plugin_id))
+            self.load_value(&format!("plugin:{plugin_id}"))
         }
 
         fn save_plugin_config(
@@ -387,7 +387,7 @@ mod tests {
             plugin_id: &str,
             config: &serde_json::Value,
         ) -> Result<(), ConfigError> {
-            self.save_value(&format!("plugin:{}", plugin_id), config)
+            self.save_value(&format!("plugin:{plugin_id}"), config)
         }
 
         fn list_plugin_configs(&self) -> Result<Vec<String>, ConfigError> {
