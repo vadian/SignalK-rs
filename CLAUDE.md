@@ -6,6 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A high-performance Signal K server implementation in Rust for marine navigation systems. Targets both Linux (full features via Axum + Tokio) and ESP32 (embedded via esp-idf).
 
+**IMPORTANT:** This project implements the [Signal K specification v1.7.0](https://signalk.org/specification/1.7.0/). All data model, API, and protocol decisions must follow the official spec. When in doubt, check the specification at https://signalk.org/specification/1.7.0/
+
+### Key Specification Requirements
+
+- **Full model** must have top-level `version`, `self`, `vessels`, and `sources` keys
+- **`self` property** points to the vessel context (e.g., `"vessels.urn:mrn:signalk:uuid:..."`)
+- **Delta context** defaults to self vessel if omitted; uses `"vessels.self"` for self vessel
+- **Vessels object** contains vessel data keyed by URN; consumers expect to find vessel contexts here
+- **Sources tracking** maintains data provenance via `$source` references
+- **SI units only** - no unit conversions needed (speed always m/s, temperature always K, etc.)
+- **ISO 8601 timestamps** (RFC 3339 format) on all data values
+
 ## Build & Development Commands
 
 ```bash

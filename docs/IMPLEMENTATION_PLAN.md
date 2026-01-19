@@ -6,6 +6,7 @@ This document consolidates research on building a high-performance SignalK serve
 
 **Target Platform:** Linux (x86_64, ARM64 - Raspberry Pi, etc.)
 **Plugin Strategy:** Deno runtime with compatibility shim for existing JS plugins
+**Reference Implementation:** TypeScript SignalK server at `../signalk-server` (use for API compatibility verification)
 
 ---
 
