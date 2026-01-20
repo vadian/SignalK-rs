@@ -41,7 +41,7 @@ impl From<serde_json::Error> for SignalKError {
 }
 
 use anyhow::Result;
-use embedded_svc::{http::Headers, ws::FrameType, ws::Sender};
+use embedded_svc::{http::Headers, ws::FrameType};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::prelude::Peripherals,
@@ -56,7 +56,7 @@ use signalk_esp32::{
     http::{
         create_discovery_json, create_hello_message, current_timestamp,
         default_subscription_for_mode, get_path_json, process_client_message, ClientSubscription,
-        SubscribeMode, WsQueryParams,
+        WsQueryParams,
     },
     wifi::connect_wifi,
 };
@@ -83,28 +83,33 @@ struct ClientState {
 /// Key is the session ID (socket fd).
 type WsClients = Arc<Mutex<HashMap<i32, ClientState>>>;
 
-/// Check if a delta should be sent to a client based on their subscription.
-fn should_send_delta(subscription: &ClientSubscription, delta: &Delta) -> bool {
+/// Check if a delta should be sent, respecting throttle limits.
+/// Returns a list of pattern indices that matched and should be marked as sent.
+fn should_send_delta_throttled(subscription: &ClientSubscription, delta: &Delta) -> Vec<usize> {
+    let mut matched_indices = Vec::new();
+
     // If no subscription, don't send anything
     if subscription.is_empty() {
-        return false;
+        return matched_indices;
     }
 
     // Check context filter
     if !subscription.matches_context(delta.context.as_deref()) {
-        return false;
+        return matched_indices;
     }
 
-    // Check if any path in the delta matches the subscription
+    // Check each path in the delta against subscription with throttle check
     for update in &delta.updates {
         for pv in &update.values {
-            if subscription.matches_path(&pv.path) {
-                return true;
+            if let Some(idx) = subscription.should_send_path(&pv.path) {
+                if !matched_indices.contains(&idx) {
+                    matched_indices.push(idx);
+                }
             }
         }
     }
 
-    false
+    matched_indices
 }
 
 // WiFi credentials - set via environment variables at build time
@@ -136,7 +141,8 @@ fn main() -> Result<()> {
 
     // Initialize WiFi using shared crate
     info!("Initializing WiFi...");
-    let (_wifi, ip_addr) = connect_wifi(WIFI_SSID, WIFI_PASSWORD, peripherals.modem, sysloop.clone())?;
+    let (_wifi, ip_addr) =
+        connect_wifi(WIFI_SSID, WIFI_PASSWORD, peripherals.modem, sysloop.clone())?;
 
     // Server configuration using shared crate
     let config = ServerConfig::new_with_uuid();
@@ -169,23 +175,34 @@ fn main() -> Result<()> {
                     store.apply_delta(&delta);
                 }
 
-                // Broadcast delta to subscribed WebSocket clients
+                // Broadcast delta to subscribed WebSocket clients with throttling
                 if let Ok(json) = serde_json::to_string(&delta) {
                     if let Ok(mut clients) = clients_processor.lock() {
                         // Collect failed client IDs for removal
                         let mut failed_clients = Vec::new();
 
                         for (client_id, client_state) in clients.iter_mut() {
-                            // Check subscription filter
-                            if !should_send_delta(&client_state.subscription, &delta) {
+                            // Check subscription filter with throttling
+                            let matched_indices =
+                                should_send_delta_throttled(&client_state.subscription, &delta);
+
+                            // Skip if no patterns matched (either not subscribed or throttled)
+                            if matched_indices.is_empty() {
                                 continue;
                             }
 
-                            if let Err(e) =
-                                client_state.sender.send(FrameType::Text(false), json.as_bytes())
+                            // Send the delta
+                            if let Err(e) = client_state
+                                .sender
+                                .send(FrameType::Text(false), json.as_bytes())
                             {
                                 warn!("Failed to send delta to client {}: {:?}", client_id, e);
                                 failed_clients.push(*client_id);
+                            } else {
+                                // Mark matched patterns as sent (update throttle timers)
+                                for idx in matched_indices {
+                                    client_state.subscription.mark_sent(idx);
+                                }
                             }
                         }
 

@@ -10,6 +10,7 @@ A minimal Signal K server implementation for ESP32 (Xtensa) microcontrollers wit
   - Live delta broadcasting via `EspHttpWsDetachedSender`
   - Subscribe/unsubscribe message support for filtering
   - Path pattern matching with wildcards (e.g., `navigation.*`)
+  - **Rate limiting with minPeriod/period** to prevent socket overload
 - **REST API**
   - `GET /signalk/v1/api` - Full data model
   - `GET /signalk/v1/api/vessels/self/navigation/position` - Path queries
@@ -182,6 +183,7 @@ Approximate usage on ESP32:
 - **Binary size**: ~500KB (release, optimized for size)
 - **RAM usage**: ~80KB typical
 - **Stack**: 16KB main task, 16KB per spawned thread
+- **Per-client subscription overhead**: ~200 bytes base + ~40 bytes per throttled pattern
 
 ## Troubleshooting
 
@@ -277,6 +279,33 @@ Path patterns support wildcards:
 - `navigation.*` - All navigation paths
 - `propulsion.*.revolutions` - Any engine's revolutions
 - `*` - Everything
+
+### Rate Limiting (Throttling)
+
+To prevent socket overload on the ESP32, subscriptions support `minPeriod` and `period` parameters that limit how often updates are sent for a given path:
+
+```bash
+# Subscribe to position updates at most once per second (1000ms)
+{"context":"vessels.self","subscribe":[{"path":"navigation.position","minPeriod":1000}]}
+
+# Subscribe to multiple paths with different rates
+{"context":"vessels.self","subscribe":[
+  {"path":"navigation.position","minPeriod":1000},
+  {"path":"navigation.speedOverGround","minPeriod":500},
+  {"path":"environment.*","minPeriod":5000}
+]}
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `minPeriod` | Minimum milliseconds between updates (rate limit) |
+| `period` | Desired milliseconds between updates (hint) |
+
+**Why throttling matters on ESP32:**
+- Limited socket buffers
+- Single-core or dual-core with limited RAM
+- Prevents overwhelming slow network connections
+- Recommended: Use `minPeriod: 1000` (1 second) for most data on embedded
 
 ### REST API Testing
 

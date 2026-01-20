@@ -832,6 +832,7 @@ fn main() -> Result<()> {
 - [x] Subscribe/unsubscribe message parsing
 - [x] Per-client subscription filtering
 - [x] REST path API `/signalk/v1/api/*path`
+- [x] Period/minPeriod throttling (rate limiting per subscription)
 
 **Blocked:**
 - [~] Query parameter parsing - esp-idf-svc doesn't expose URI on WebSocket connections; use subscribe messages instead
@@ -961,10 +962,14 @@ The ESP32 implementation aims to provide a fully functional SignalK server for m
 | Feature | Status | Notes |
 |---------|--------|-------|
 | WebSocket Hello | ✅ | Spec-compliant format |
-| Delta Broadcasting | ✅ | All clients receive all deltas |
+| Delta Broadcasting | ✅ | Per-client subscription filtering |
 | REST Discovery | ✅ | `/signalk` endpoint |
 | REST Full API | ✅ | `/signalk/v1/api` returns full model |
+| REST Path API | ✅ | `/signalk/v1/api/*path` for specific paths |
 | Multi-client | ✅ | HashMap tracking, cleanup on disconnect |
+| Subscribe/Unsubscribe | ✅ | Client messages parsed and applied |
+| Path Pattern Matching | ✅ | Wildcards (`navigation.*`, `*`) supported |
+| minPeriod Throttling | ✅ | Rate limiting per subscription pattern |
 | Demo Data | ✅ | Position, SOG, COG updates at 1Hz |
 
 **Architecture:**
