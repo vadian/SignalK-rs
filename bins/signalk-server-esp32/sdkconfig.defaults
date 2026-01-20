@@ -1,0 +1,40 @@
+# SignalK ESP32 Server - ESP-IDF Configuration
+#
+# WARNING: This file is NOT used by esp-idf-sys!
+# The workspace root's sdkconfig.defaults is used instead.
+# This file is kept for reference only.
+# See README.md for details on the sdkconfig.defaults location issue.
+
+# Stack sizes - Rust needs more than C defaults
+# Main task stack (default is 3KB, Rust needs ~16KB for JSON serialization)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# Minimum pthread stack (threads spawned with std::thread::Builder must be >= this)
+CONFIG_PTHREAD_STACK_MIN=16384
+
+# Stack overflow detection (useful for debugging)
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW=2
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
+# FreeRTOS tick frequency - 100 Hz by default (10ms granularity)
+# Uncomment for 1ms granularity if needed for precise timing
+#CONFIG_FREERTOS_HZ=1000
+
+# WiFi configuration
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# HTTP server configuration
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# WebSocket support (required for SignalK streaming)
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_WS_TRANSPORT=y
+CONFIG_WS_BUFFER_SIZE=1024
+
+# Increase LWIP socket count for multiple WebSocket connections
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# Enable mDNS for service discovery (future use)
+CONFIG_MDNS_MAX_SERVICES=10

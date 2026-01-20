@@ -1,115 +1,389 @@
-//! SignalK Server for ESP32
+//! SignalK Server for ESP32 (Xtensa)
 //!
-//! This binary requires the ESP32 Rust toolchain.
-//! It will not compile with the standard Rust toolchain.
+//! A minimal Signal K server implementation for ESP32 microcontrollers.
+//! Uses esp-idf-svc for WiFi, HTTP, and WebSocket functionality.
 //!
-//! NOTE: This is a REFERENCE IMPLEMENTATION showing how to structure
-//! ESP32 deployment. The core logic (MemoryStore, Delta processing)
-//! is identical to Linux - only the server infrastructure differs.
+//! # Features
+//! - WebSocket server for delta streaming
+//! - HTTP server for discovery and REST API
+//! - Shared signalk-core and signalk-protocol crates (same as Linux)
+//!
+//! # Differences from Linux Version
+//! - Uses std::sync::Mutex instead of tokio::sync::RwLock
+//! - Uses std::thread instead of tokio::spawn
+//! - Uses esp-idf-svc HTTP server instead of Axum
+//! - No admin UI (flash storage constraints)
+//! - No plugin support
 
-// Uncomment when ESP32 toolchain is available:
-// use esp_idf_svc::eventloop::EspSystemEventLoop;
-// use esp_idf_svc::http::server::{Configuration, EspHttpServer};
-// use esp_idf_svc::nvs::EspDefaultNvsPartition;
-// use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration as WifiConfig, EspWifi};
-// use esp_idf_sys as _;
-
-use signalk_core::{Delta, MemoryStore, PathValue, SignalKStore, Update};
-use signalk_protocol::{HelloMessage, ServerMessage};
-use std::sync::{Arc, Mutex};
-
-fn main() -> anyhow::Result<()> {
-    // ESP32-specific: Initialize ESP-IDF
-    // esp_idf_sys::link_patches();
-    
-    println!("SignalK ESP32 Server - Reference Implementation");
-    println!("This demonstrates how ESP32 deployment differs from Linux");
-    println!();
-    println!("Key differences:");
-    println!("  - Uses esp-idf-svc instead of Axum");
-    println!("  - Uses Mutex instead of Tokio RwLock");
-    println!("  - Uses std::thread instead of tokio::spawn");
-    println!("  - No admin UI (limited flash storage)");
-    println!();
-    println!("Shared with Linux:");
-    println!("  ✓ signalk-core::MemoryStore (identical)");
-    println!("  ✓ signalk-protocol::Delta (identical)");
-    println!("  ✓ Business logic (delta processing)");
-    println!();
-    println!("To build for ESP32, you need:");
-    println!("  1. ESP32 Rust toolchain: https://esp-rs.github.io/book/");
-    println!("  2. Uncomment ESP-IDF dependencies in Cargo.toml");
-    println!("  3. Uncomment ESP-IDF code in this file");
-    println!();
-    
-    // REFERENCE: How ESP32 implementation would work
-    reference_esp32_architecture();
-    
-    Ok(())
-}
-
-/// Reference architecture showing ESP32 server structure
-fn reference_esp32_architecture() {
-    println!("=== ESP32 Architecture Reference ===");
-    println!();
-    println!("1. Initialization:");
-    println!("   let store = Arc::new(Mutex::new(MemoryStore::new(urn)));");
-    println!("   // Same MemoryStore as Linux!");
-    println!();
-    
-    println!("2. Delta Processing Thread:");
-    println!("   std::thread::spawn(move || {{");
-    println!("       while let Ok(delta) = delta_rx.recv() {{");
-    println!("           store.lock().unwrap().apply_delta(&delta);");
-    println!("           // Broadcast to WebSocket clients");
-    println!("       }}");
-    println!("   }});");
-    println!();
-    
-    println!("3. HTTP Server (esp-idf-svc):");
-    println!("   let server = EspHttpServer::new(&Default::default())?;");
-    println!("   server.fn_handler(\"/signalk\", Method::Get, discovery_handler)?;");
-    println!();
-    
-    println!("4. WebSocket Connections:");
-    println!("   // Send HelloMessage (same protocol as Linux)");
-    println!("   let hello = HelloMessage::new(name, version, urn);");
-    println!("   let msg = ServerMessage::Hello(hello);");
-    println!("   ws_send(serde_json::to_string(&msg)?);");
-    println!();
-    
-    println!("See docs/ESP32_MODULARITY.md for complete implementation guide");
-}
-
-// Example: Shared business logic works identically on ESP32
-fn example_shared_logic() {
-    // This exact code works on both Linux and ESP32
-    let urn = "urn:mrn:signalk:uuid:esp32-device-001";
-    let mut store = MemoryStore::new(urn);
-    
-    // Create and apply delta (same on both platforms)
-    let delta = Delta {
-        context: Some("vessels.self".to_string()),
-        updates: vec![Update {
-            source_ref: Some("esp32.gps".to_string()),
-            source: None,
-            timestamp: Some("2026-01-17T10:30:00.000Z".to_string()),
-            values: vec![PathValue {
-                path: "navigation.position".to_string(),
-                value: serde_json::json!({
-                    "latitude": 60.123456,
-                    "longitude": 24.987654
-                }),
-            }],
-            meta: None,
-        }],
-    };
-    
-    store.apply_delta(&delta);
-    
-    // Query data (same on both platforms)
-    if let Some(value) = store.get_path("vessels/urn:mrn:signalk:uuid:esp32-device-001/navigation/position") {
-        println!("Position retrieved: {}", value);
+use esp_idf_hal::io::EspIOError;
+use esp_idf_svc::sys::EspError;
+#[derive(Debug)]
+pub struct SignalKError {}
+impl From<EspError> for SignalKError {
+    fn from(err: EspError) -> Self {
+        log::error!("EspError occurred: {err:?}");
+        SignalKError {}
     }
 }
 
+impl From<EspIOError> for SignalKError {
+    fn from(err: EspIOError) -> Self {
+        log::error!("EspIOError occurred: {err:?}");
+        SignalKError {}
+    }
+}
+
+impl From<serde_json::Error> for SignalKError {
+    fn from(err: serde_json::Error) -> Self {
+        log::error!("Serde JSON Error occurred: {err:?}");
+        SignalKError {}
+    }
+}
+
+use anyhow::Result;
+use embedded_svc::{http::Headers, ws::FrameType, ws::Sender};
+use esp_idf_svc::{
+    eventloop::EspSystemEventLoop,
+    hal::prelude::Peripherals,
+    http::server::{ws::EspHttpWsDetachedSender, Configuration as HttpConfig, EspHttpServer},
+    io::Write,
+};
+use log::{error, info, warn};
+use serde_json::json;
+use signalk_core::{Delta, MemoryStore, PathValue, SignalKStore, Update};
+use signalk_esp32::{
+    config::ServerConfig,
+    http::{create_discovery_json, create_hello_message, current_timestamp},
+    wifi::connect_wifi,
+};
+use std::{
+    collections::HashMap,
+    sync::{mpsc, Arc, Mutex},
+    thread,
+    time::Duration,
+};
+
+/// Type alias for the collection of connected WebSocket clients
+/// Key is a unique client ID (we'll use the fd from the detached sender)
+type WsClients = Arc<Mutex<HashMap<i32, EspHttpWsDetachedSender>>>;
+
+// WiFi credentials - set via environment variables at build time
+// Example: WIFI_SSID="MyNetwork" WIFI_PASSWORD="secret" cargo build
+// Falls back to "unconfigured" if not set (will fail to connect)
+const WIFI_SSID: &str = match option_env!("WIFI_SSID") {
+    Some(v) => v,
+    None => "unconfigured",
+};
+const WIFI_PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
+    Some(v) => v,
+    None => "unconfigured",
+};
+
+fn main() -> Result<()> {
+    // Initialize ESP-IDF patches
+    esp_idf_svc::sys::link_patches();
+
+    // Initialize logging
+    esp_idf_svc::log::EspLogger::initialize_default();
+
+    info!("========================================");
+    info!("  SignalK Server for ESP32 (Xtensa)");
+    info!("========================================");
+
+    // Take peripherals
+    let peripherals = Peripherals::take()?;
+    let sysloop = EspSystemEventLoop::take()?;
+
+    // Initialize WiFi using shared crate
+    info!("Initializing WiFi...");
+    let (_wifi, ip_addr) = connect_wifi(WIFI_SSID, WIFI_PASSWORD, peripherals.modem, sysloop.clone())?;
+
+    // Server configuration using shared crate
+    let config = ServerConfig::new_with_uuid();
+    info!("Server URN: {}", config.self_urn);
+
+    // Create shared store (same as Linux, but with Mutex instead of RwLock)
+    let store = Arc::new(Mutex::new(MemoryStore::new(&config.self_urn)));
+
+    // Create shared collection of WebSocket clients for delta broadcasting
+    let ws_clients: WsClients = Arc::new(Mutex::new(HashMap::new()));
+
+    // Channel for delta events
+    let (delta_tx, delta_rx) = mpsc::channel::<Delta>();
+
+    // Clone store and clients for delta processor
+    let store_processor = Arc::clone(&store);
+    let clients_processor: WsClients = Arc::clone(&ws_clients);
+
+    // Spawn delta processor thread
+    // Note: Must use Builder with explicit stack_size to avoid TLS initialization issues
+    // on ESP-IDF. Stack must be >= CONFIG_PTHREAD_STACK_MIN (16KB in sdkconfig.defaults).
+    std::thread::Builder::new()
+        .name("delta-proc".into())
+        .stack_size(16 * 1024) // 16KB - must match CONFIG_PTHREAD_STACK_MIN
+        .spawn(move || {
+            info!("Delta processor started");
+            while let Ok(delta) = delta_rx.recv() {
+                // Apply delta to store
+                if let Ok(mut store) = store_processor.lock() {
+                    store.apply_delta(&delta);
+                }
+
+                // Broadcast delta to all connected WebSocket clients
+                if let Ok(json) = serde_json::to_string(&delta) {
+                    if let Ok(mut clients) = clients_processor.lock() {
+                        // Collect failed client IDs for removal
+                        let mut failed_clients = Vec::new();
+
+                        for (client_id, sender) in clients.iter_mut() {
+                            if let Err(e) = sender.send(FrameType::Text(false), json.as_bytes()) {
+                                warn!("Failed to send delta to client {}: {:?}", client_id, e);
+                                failed_clients.push(*client_id);
+                            }
+                        }
+
+                        // Remove failed clients
+                        for client_id in failed_clients {
+                            clients.remove(&client_id);
+                            info!("Removed disconnected client {}", client_id);
+                        }
+                    }
+                }
+            }
+            warn!("Delta processor stopped");
+        })
+        .expect("Failed to spawn delta processor thread");
+
+    // Start HTTP server with WebSocket support
+    let _server = start_http_server(&config, Arc::clone(&store), Arc::clone(&ws_clients))?;
+
+    // Start demo data generator
+    let delta_tx_demo = delta_tx.clone();
+    std::thread::Builder::new()
+        .name("demo-gen".into())
+        .stack_size(16 * 1024) // 16KB - must match CONFIG_PTHREAD_STACK_MIN
+        .spawn(move || {
+            generate_demo_data(delta_tx_demo);
+        })
+        .expect("Failed to spawn demo generator thread");
+
+    info!("========================================");
+    info!("          Server Ready!");
+    info!("========================================");
+    info!("Discovery: http://{}/signalk", ip_addr);
+    info!("REST API:  http://{}/signalk/v1/api", ip_addr);
+    info!("WebSocket: ws://{}/signalk/v1/stream", ip_addr);
+    info!("========================================");
+
+    // Keep server alive
+    // The server handle must be kept alive for the server to run
+    loop {
+        thread::sleep(Duration::from_secs(60));
+    }
+}
+
+/// Start HTTP server with REST and WebSocket endpoints
+fn start_http_server(
+    config: &ServerConfig,
+    store: Arc<Mutex<MemoryStore>>,
+    ws_clients: WsClients,
+) -> Result<EspHttpServer<'static>> {
+    let http_config = HttpConfig {
+        http_port: config.http_port,
+        // Increase stack size for HTTP handlers - JSON serialization needs room
+        stack_size: 16384, // 16KB (default is ~4KB which is too small for serde_json)
+        ..Default::default()
+    };
+
+    let mut server = EspHttpServer::new(&http_config)?;
+
+    // Clone config values for handlers
+    let config_name = config.name.clone();
+    let config_version = config.version.clone();
+    let config_self_urn = config.self_urn.clone();
+    let config_port = config.http_port;
+
+    // Discovery endpoint: GET /signalk
+    server.fn_handler("/signalk", esp_idf_svc::http::Method::Get, move |req| {
+        // Get local IP from the request
+        let host = req.host().unwrap_or("localhost");
+
+        let json = create_discovery_json(host, config_port)?;
+
+        let mut response = req.into_ok_response()?;
+        response.write_all(json.as_bytes())?;
+        Ok::<(), SignalKError>(())
+    })?;
+
+    // REST API: GET /signalk/v1/api
+    let api_store = Arc::clone(&store);
+    server.fn_handler(
+        "/signalk/v1/api",
+        esp_idf_svc::http::Method::Get,
+        move |req| {
+            let json = if let Ok(store) = api_store.lock() {
+                serde_json::to_string(store.full_model())?
+            } else {
+                r#"{"error": "Store locked"}"#.to_string()
+            };
+
+            let mut response = req.into_ok_response()?;
+            response.write_all(json.as_bytes())?;
+            Ok::<(), SignalKError>(())
+        },
+    )?;
+
+    // WebSocket endpoint: GET /signalk/v1/stream
+    let ws_name = config_name.clone();
+    let ws_version = config_version.clone();
+    let ws_self_urn = config_self_urn.clone();
+    let ws_store = Arc::clone(&store);
+    let ws_clients_handler: WsClients = Arc::clone(&ws_clients);
+
+    server.ws_handler("/signalk/v1/stream", move |ws| {
+        let client_id = ws.session();
+
+        // Handle new connection
+        if ws.is_new() {
+            info!("WebSocket client {} connected", client_id);
+
+            // Send hello message using shared helper
+            let hello_msg = create_hello_message(&ws_name, &ws_version, &ws_self_urn);
+
+            if let Ok(json) = serde_json::to_string(&hello_msg) {
+                if let Err(e) = ws.send(FrameType::Text(false), json.as_bytes()) {
+                    error!("Failed to send hello: {:?}", e);
+                    return Ok::<(), SignalKError>(());
+                }
+            }
+
+            // Send current state if sendCachedValues is true (default)
+            if let Ok(store) = ws_store.lock() {
+                let full_model = store.full_model();
+                if let Ok(json) = serde_json::to_string(&full_model) {
+                    let _ = ws.send(FrameType::Text(false), json.as_bytes());
+                }
+            }
+
+            // Create detached sender for this client and register it
+            // This allows the delta processor thread to push updates to this client
+            match ws.create_detached_sender() {
+                Ok(sender) => {
+                    if let Ok(mut clients) = ws_clients_handler.lock() {
+                        clients.insert(client_id, sender);
+                        info!("Registered client {} for delta streaming ({} total)", client_id, clients.len());
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create detached sender for client {}: {:?}", client_id, e);
+                }
+            }
+
+            // Return after handling new connection - don't try to recv yet
+            return Ok::<(), SignalKError>(());
+        }
+
+        // Handle closed connection
+        if ws.is_closed() {
+            // Remove client from broadcast list
+            if let Ok(mut clients) = ws_clients_handler.lock() {
+                clients.remove(&client_id);
+                info!("WebSocket client {} disconnected ({} remaining)", client_id, clients.len());
+            }
+            return Ok::<(), SignalKError>(());
+        }
+
+        // Handle incoming data - use a reasonably sized buffer
+        // The handler is called when there's data available
+        let mut buf = [0u8; 1024];
+        let (frame_type, len) = match ws.recv(&mut buf) {
+            Ok(result) => result,
+            Err(e) => {
+                // This can happen on connection close or timeout - not always an error
+                warn!("WebSocket recv: {:?}", e);
+                return Ok::<(), SignalKError>(());
+            }
+        };
+
+        match frame_type {
+            FrameType::Ping => {
+                let _ = ws.send(FrameType::Pong, &[]);
+            }
+            FrameType::Text(_) if len > 0 => {
+                if let Ok(text) = std::str::from_utf8(&buf[..len]) {
+                    info!("Received from client {}: {}", client_id, text);
+                    // TODO: Handle subscription messages
+                }
+            }
+            FrameType::Close => {
+                info!("WebSocket close frame received from client {}", client_id);
+                // Remove client from broadcast list
+                if let Ok(mut clients) = ws_clients_handler.lock() {
+                    clients.remove(&client_id);
+                }
+            }
+            _ => {}
+        }
+
+        Ok::<(), SignalKError>(())
+    })?;
+
+    info!("HTTP server started on port {}", config.http_port);
+    Ok(server)
+}
+
+/// Generate demo navigation data
+fn generate_demo_data(delta_tx: mpsc::Sender<Delta>) {
+    info!("Demo data generator started");
+
+    let mut latitude = 52.0987654;
+    let mut longitude = 4.9876545;
+    let mut counter: u64 = 0;
+
+    loop {
+        thread::sleep(Duration::from_secs(1));
+
+        // Update position
+        latitude += 0.00001;
+        longitude += 0.00002;
+
+        // Vary speed and course
+        let sog = 3.85 + (counter as f64 * 0.1).sin() * 0.5;
+        let cog = 1.52 + (counter as f64 * 0.1).cos() * 0.1;
+
+        // Create delta (same structure as Linux version!)
+        let delta = Delta {
+            context: Some("vessels.self".to_string()),
+            updates: vec![Update {
+                source_ref: Some("demo.generator".to_string()),
+                source: None,
+                timestamp: Some(current_timestamp()),
+                values: vec![
+                    PathValue {
+                        path: "navigation.position".to_string(),
+                        value: json!({
+                            "latitude": latitude,
+                            "longitude": longitude
+                        }),
+                    },
+                    PathValue {
+                        path: "navigation.speedOverGround".to_string(),
+                        value: json!(sog),
+                    },
+                    PathValue {
+                        path: "navigation.courseOverGroundTrue".to_string(),
+                        value: json!(cog),
+                    },
+                ],
+                meta: None,
+            }],
+        };
+
+        if delta_tx.send(delta).is_err() {
+            error!("Failed to send demo delta");
+            break;
+        }
+
+        counter += 1;
+    }
+}

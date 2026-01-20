@@ -19,17 +19,25 @@ SignalK-RS is a modular implementation of the [SignalK specification v1.7.0](htt
 ```
 signalk-rs/
 ├── crates/
-│   ├── signalk-core/        # Runtime-agnostic data model
+│   ├── signalk-core/        # Runtime-agnostic data model (no async)
 │   ├── signalk-protocol/    # WebSocket/REST message types
 │   ├── signalk-server/      # WebSocket server (tokio)
 │   ├── signalk-web/         # Admin UI & REST API (axum)
 │   ├── signalk-plugins/     # Deno plugin runtime (planned)
-│   └── signalk-providers/   # Data source parsers (planned)
+│   ├── signalk-providers/   # Data source parsers (planned)
+│   └── signalk-esp32/       # ESP32-specific components (WiFi, NVS, HTTP)
 │
 └── bins/
     ├── signalk-server-linux/  # Full Linux binary (port 4000)
-    └── signalk-server-esp32/  # ESP32 binary (future)
+    └── signalk-server-esp32/  # ESP32 binary (port 80) - separate build
 ```
+
+### Platform Support
+
+| Platform | Toolchain | Crates Used | Features |
+|----------|-----------|-------------|----------|
+| Linux | Standard Rust | core, protocol, server, web, plugins | Full (Admin UI, plugins, providers) |
+| ESP32 (Xtensa) | esp-rs | core, protocol, esp32 | Minimal (WebSocket, REST, discovery) |
 
 ## Crate Responsibilities
 
@@ -202,6 +210,20 @@ The `/sources` tree is automatically populated from delta messages:
 - SignalK TCP/UDP
 - File replay
 
+### signalk-esp32
+
+**Purpose:** ESP32-specific shared components for embedded SignalK servers.
+
+**Key Modules:**
+- `wifi` - WiFi connection management with scanning and auto-reconnect
+- `config` - NVS-based configuration storage (planned)
+- `http` - Helper functions for SignalK HTTP/WebSocket handlers
+
+**Design Principles:**
+- Reusable across different ESP32 board variants
+- Uses blocking APIs (no async) - FreeRTOS threads for concurrency
+- Memory-efficient for constrained environments
+
 ## Current Architecture (Linux)
 
 The Linux implementation uses a unified Axum server on port 4000:
@@ -233,6 +255,89 @@ The Linux implementation uses a unified Axum server on port 4000:
 - `WS /signalk/v1/stream` - WebSocket with query params
 - `GET /admin/*` - Admin UI static files
 - `GET /skServer/*` - Server management REST API
+
+## ESP32 Architecture
+
+The ESP32 implementation uses esp-idf-svc on port 80 with real-time delta streaming:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              esp-idf-svc Server (Port 80)                   │
+│                                                             │
+│  ┌────────────────┐                                         │
+│  │ Demo Generator │──────┐                                  │
+│  │ (std::thread)  │      │                                  │
+│  └────────────────┘      │ mpsc::channel                    │
+│                          ▼                                  │
+│  ┌────────────────────────────┐     ┌───────────────────┐  │
+│  │     Delta Processor        │     │   WS Clients      │  │
+│  │     (std::thread)          │     │   HashMap<i32,    │  │
+│  │                            │────►│   DetachedSender> │  │
+│  │  1. Apply to MemoryStore   │     └─────────┬─────────┘  │
+│  │  2. Broadcast to clients   │               │            │
+│  └────────────────────────────┘               │            │
+│                                               ▼            │
+│                                    ┌──────────────────┐    │
+│                                    │  WebSocket Push  │    │
+│                                    │  (async via      │    │
+│                                    │   httpd_queue)   │    │
+│                                    └──────────────────┘    │
+│                                                             │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │                  HTTP Server                        │    │
+│  │  GET /signalk         - Discovery                   │    │
+│  │  GET /signalk/v1/api  - Full model JSON            │    │
+│  │  WS  /signalk/v1/stream - WebSocket streaming      │    │
+│  └────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Implementation Details:**
+
+- **Delta Broadcast**: Uses `EspHttpWsDetachedSender` to push deltas from the processor thread to WebSocket clients. This leverages ESP-IDF's `httpd_ws_send_frame_async` for server-initiated push.
+- **Client Tracking**: Connected clients stored in `Arc<Mutex<HashMap<i32, EspHttpWsDetachedSender>>>` keyed by socket fd.
+- **Thread Stack**: All threads use 16KB stack via `std::thread::Builder::stack_size()` to match `CONFIG_PTHREAD_STACK_MIN`.
+
+**Key Differences from Linux:**
+
+| Component | Linux | ESP32 |
+|-----------|-------|-------|
+| HTTP Server | Axum (async) | esp-idf-svc (blocking) |
+| Delta Broadcast | `broadcast::channel` | `EspHttpWsDetachedSender` |
+| Concurrency | tokio::spawn | std::thread::Builder |
+| Sync primitives | RwLock | Mutex |
+| Config storage | Filesystem | NVS (planned) |
+| Admin UI | Full React (34MB) | None |
+| Plugins | Deno runtime | Not supported |
+| Port | 4000 | 80 |
+| Binary size | ~5MB | ~500KB |
+| RAM usage | ~50MB | ~80KB |
+
+**Shared Code:**
+
+The following crates work unchanged on ESP32:
+- `signalk-core` - MemoryStore, Delta, PathValue
+- `signalk-protocol` - HelloMessage, ServerMessage, DiscoveryResponse
+
+**Build Requirements:**
+
+ESP32 requires the Espressif Rust toolchain (installed via `espup`). The `rust-toolchain.toml` in the ESP32 directory automatically selects the correct toolchain:
+
+```bash
+# Install ESP toolchain (one-time setup)
+cargo install espup && espup install
+. $HOME/export-esp.sh  # Source ESP environment
+
+# Build and flash ESP32 binary
+cd bins/signalk-server-esp32
+WIFI_SSID="network" WIFI_PASSWORD="pass" cargo run --release
+```
+
+**Known Issue - sdkconfig.defaults Location:**
+
+The `esp-idf-sys` build system uses `sdkconfig.defaults` from the **workspace root**, not from the ESP32 binary directory. This is because it resolves paths relative to where `Cargo.lock` and `target/` are located. See [esp-idf-sys BUILD-OPTIONS.md](https://github.com/esp-rs/esp-idf-sys/blob/master/BUILD-OPTIONS.md) for details.
+
+See [bins/signalk-server-esp32/README.md](../bins/signalk-server-esp32/README.md) for full setup instructions.
 
 ## Data Flow
 

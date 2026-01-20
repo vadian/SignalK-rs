@@ -1,0 +1,20 @@
+[build]
+target = "xtensa-esp32-espidf"
+
+[target.xtensa-esp32-espidf]
+linker = "ldproxy"
+runner = "espflash flash --baud=921600 --monitor"
+# Extending time_t for ESP IDF 5: https://github.com/esp-rs/rust/issues/110
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32"
+# ESP-IDF version - using v5.3.2
+ESP_IDF_VERSION = "v5.3.2"
+
+# Optional: Uncomment and set your serial port for flashing
+# [connection]
+# serial = "/dev/ttyUSB0"

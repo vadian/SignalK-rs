@@ -1,24 +1,49 @@
 [package]
 name = "signalk-server-esp32"
-description = "SignalK server for ESP32 (no plugin support)"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
+description = "SignalK server for ESP32 (minimal, no plugin support)"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.82"
 
 [[bin]]
 name = "signalk-server-esp32"
 path = "src/main.rs"
 
-# Note: This crate requires ESP32 toolchain and is not built by default.
-# See README for setup instructions.
+# Note: Profile settings for ESP32 (opt-level, lto) are in workspace Cargo.toml
+
+[features]
+default = ["std", "esp-idf-svc/native"]
+pio = ["esp-idf-svc/pio"]
+std = ["alloc", "esp-idf-svc/binstart", "esp-idf-svc/std"]
+alloc = ["esp-idf-svc/alloc"]
 
 [dependencies]
-signalk-core = { workspace = true }
-signalk-protocol = { workspace = true }
-# signalk-server = { workspace = true, default-features = false, features = ["esp-idf-runtime"] }
-# esp-idf-svc = "0.48"
-# esp-idf-hal = "0.43"
+# Shared SignalK crates (platform-agnostic)
+signalk-core = { path = "../../crates/signalk-core" }
+signalk-protocol = { path = "../../crates/signalk-protocol" }
 
-[lints]
-workspace = true
+# ESP32-specific shared components
+signalk-esp32 = { path = "../../crates/signalk-esp32" }
+
+# ESP-IDF framework
+# Note: experimental feature enables ws_handler for WebSocket server support
+esp-idf-svc = { version = "0.51", default-features = false, features = ["experimental"] }
+esp-idf-hal = { version = "0.45.2", default-features = false, features = ["experimental"] }
+embedded-svc = { version = "0.28", features = ["experimental"] }
+
+# Logging
+log = "0.4"
+
+# Error handling
+anyhow = "1.0"
+
+# Serialization (already used by signalk-core)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4"] }
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }

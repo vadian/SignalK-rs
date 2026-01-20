@@ -9,7 +9,10 @@ members = [
     "crates/signalk-providers",
     "crates/signalk-web",
     "bins/signalk-server-linux",
-    # "bins/signalk-server-esp32",  # Uncomment when ESP32 toolchain is set up
+]
+exclude = [
+    "crates/signalk-esp32",
+    "bins/signalk-server-esp32"
 ]
 
 [workspace.package]
