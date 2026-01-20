@@ -813,12 +813,35 @@ fn main() -> Result<()> {
 - [ ] Period/minPeriod throttling (parameters accepted, enforcement deferred)
 - [ ] Policy implementation (instant works, ideal/fixed deferred)
 
-### Phase 4: ESP32 Port (Parallel Track)
-- [ ] `signalk-server`: Add `esp-idf-runtime` feature
-- [ ] ESP32 WebSocket server implementation
-- [ ] `signalk-server-esp32` binary crate
-- [ ] WiFi configuration (NVS-based)
-- [ ] Test on hardware with SignalK client
+### Phase 4: ESP32 Port ✅ (Core Complete)
+
+**Completed:**
+- [x] `signalk-esp32` crate with WiFi, config, HTTP helpers
+- [x] `signalk-server-esp32` binary with working WebSocket server
+- [x] WiFi connectivity via environment variables (build-time)
+- [x] Discovery endpoint `/signalk`
+- [x] REST API `/signalk/v1/api` (full model)
+- [x] WebSocket `/signalk/v1/stream` with hello message
+- [x] Delta broadcasting via `EspHttpWsDetachedSender`
+- [x] Demo data generator for testing
+- [x] Multi-client support with proper cleanup
+- [x] Thread stack sizing (16KB) for FreeRTOS compatibility
+- [x] Documentation in README.md and ARCHITECTURE.md
+
+**Completed - Feature Parity:**
+- [x] Subscribe/unsubscribe message parsing
+- [x] Per-client subscription filtering
+- [x] REST path API `/signalk/v1/api/*path`
+
+**Blocked:**
+- [~] Query parameter parsing - esp-idf-svc doesn't expose URI on WebSocket connections; use subscribe messages instead
+
+**Deferred (Not needed for embedded):**
+- [ ] Admin UI (flash constraints)
+- [ ] Plugin system (too complex)
+- [ ] Server events (Admin UI specific)
+- [ ] Full REST management API
+- [ ] NVS configuration storage (future)
 
 ### Phase 5: Deno Plugin Bridge (Linux)
 - [ ] `signalk-plugins`: Deno subprocess management
@@ -921,12 +944,304 @@ fn main() -> Result<()> {
 ## 10. Next Steps
 
 1. **Complete Phase 3** - Subscription policies, period throttling, delta cache
-2. **Phase 4** - ESP32 port with basic WebSocket server
+2. **Phase 4** - ESP32 feature parity (subscription filtering, REST path API)
 3. **Phase 5-6** - Deno plugin bridge and API implementation
 4. **Phase 7** - NMEA providers for real data input
 5. **Phase 8-9** - REST API and Admin UI
 
 ---
+
+## 11. ESP32 Feature Parity Roadmap
+
+The ESP32 implementation aims to provide a fully functional SignalK server for marine navigation on embedded hardware. This section details the feature parity plan.
+
+### 11.1 Current ESP32 Status
+
+**Working Features:**
+| Feature | Status | Notes |
+|---------|--------|-------|
+| WebSocket Hello | ✅ | Spec-compliant format |
+| Delta Broadcasting | ✅ | All clients receive all deltas |
+| REST Discovery | ✅ | `/signalk` endpoint |
+| REST Full API | ✅ | `/signalk/v1/api` returns full model |
+| Multi-client | ✅ | HashMap tracking, cleanup on disconnect |
+| Demo Data | ✅ | Position, SOG, COG updates at 1Hz |
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│              esp-idf-svc Server (Port 80)                   │
+│                                                             │
+│  ┌────────────────┐      mpsc::channel                      │
+│  │ Demo Generator │──────────────┐                          │
+│  │ (std::thread)  │              │                          │
+│  └────────────────┘              ▼                          │
+│                     ┌────────────────────────────┐          │
+│                     │     Delta Processor        │          │
+│                     │     (std::thread)          │          │
+│                     │  1. Apply to MemoryStore   │          │
+│                     │  2. Broadcast to clients   │─────┐    │
+│                     └────────────────────────────┘     │    │
+│                                                        ▼    │
+│  ┌────────────────────────────────────────────────────────┐│
+│  │          WS Clients: HashMap<i32, DetachedSender>      ││
+│  └────────────────────────────────────────────────────────┘│
+│                                                             │
+│  ┌────────────────────────────────────────────────────────┐│
+│  │  HTTP Endpoints:                                        ││
+│  │  GET /signalk         - Discovery JSON                  ││
+│  │  GET /signalk/v1/api  - Full model                      ││
+│  │  WS  /signalk/v1/stream - WebSocket streaming           ││
+│  └────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 Phase 4a: Query Parameter Support
+
+**Goal:** Parse WebSocket query parameters for client-controlled behavior.
+
+**Implementation:**
+
+```rust
+// In ws_handler, extract query params from request
+struct WsQueryParams {
+    subscribe: SubscribeMode,      // self, all, none (default: self)
+    send_cached_values: bool,      // true, false (default: true)
+}
+
+enum SubscribeMode {
+    Self_,  // Only self vessel
+    All,    // All vessels
+    None,   // No initial subscription
+}
+```
+
+**Changes Required:**
+1. Parse query string from WebSocket upgrade request
+2. Store `WsQueryParams` per client alongside `DetachedSender`
+3. Respect `send_cached_values` when sending initial state
+4. Respect `subscribe` mode for initial delta filtering
+
+**Files to Modify:**
+- `bins/signalk-server-esp32/src/main.rs` - Query parsing in ws_handler
+- `crates/signalk-esp32/src/http.rs` - Helper for parsing query strings
+
+### 11.3 Phase 4b: Subscription Message Parsing
+
+**Goal:** Handle incoming subscribe/unsubscribe messages from clients.
+
+**SignalK Subscribe Message:**
+```json
+{
+  "context": "vessels.self",
+  "subscribe": [
+    { "path": "navigation.*", "period": 1000 },
+    { "path": "environment.wind.*" }
+  ]
+}
+```
+
+**SignalK Unsubscribe Message:**
+```json
+{
+  "context": "*",
+  "unsubscribe": [{ "path": "*" }]
+}
+```
+
+**Implementation:**
+
+```rust
+// New types in signalk-esp32 or reuse from signalk-protocol
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ClientMessage {
+    Subscribe { context: Option<String>, subscribe: Vec<SubscribeSpec> },
+    Unsubscribe { context: Option<String>, unsubscribe: Vec<PathSpec> },
+}
+
+#[derive(Deserialize)]
+struct SubscribeSpec {
+    path: String,
+    #[serde(default)]
+    period: Option<u32>,     // Accepted but ignored (no throttling on ESP32)
+    #[serde(default)]
+    policy: Option<String>,  // Accepted but ignored
+}
+```
+
+**Changes Required:**
+1. Parse incoming text frames as `ClientMessage`
+2. Update client subscription state
+3. Log subscription changes
+
+**Files to Modify:**
+- `bins/signalk-server-esp32/src/main.rs` - Message parsing in recv handler
+
+### 11.4 Phase 4c: Per-Client Subscription Filtering
+
+**Goal:** Filter delta broadcasts based on each client's subscriptions.
+
+**Data Structure:**
+```rust
+// Enhanced client tracking
+struct ClientState {
+    sender: EspHttpWsDetachedSender,
+    subscriptions: Vec<PathPattern>,  // From signalk-core
+    context_filter: Option<String>,   // "vessels.self", "*", etc.
+}
+
+type WsClients = Arc<Mutex<HashMap<i32, ClientState>>>;
+```
+
+**Filtering Logic:**
+```rust
+fn should_send_delta(client: &ClientState, delta: &Delta) -> bool {
+    // Check context filter
+    if let Some(filter) = &client.context_filter {
+        if filter != "*" && delta.context.as_deref() != Some(filter) {
+            return false;
+        }
+    }
+
+    // Check path subscriptions
+    for update in &delta.updates {
+        for pv in &update.values {
+            for pattern in &client.subscriptions {
+                if pattern.matches(&pv.path) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+```
+
+**Changes Required:**
+1. Enhance `WsClients` to store `ClientState` instead of just `DetachedSender`
+2. Apply filtering in delta processor thread before sending
+3. Reuse `PathPattern` from `signalk-core` for wildcard matching
+
+**Files to Modify:**
+- `bins/signalk-server-esp32/src/main.rs` - Client state, filtering logic
+
+### 11.5 Phase 4d: REST Path API
+
+**Goal:** Support path-based REST queries.
+
+**Endpoints:**
+- `GET /signalk/v1/api/vessels/self` - Self vessel data
+- `GET /signalk/v1/api/vessels/self/navigation` - Navigation group
+- `GET /signalk/v1/api/vessels/self/navigation/position` - Specific path
+
+**Implementation:**
+
+```rust
+// New handler with wildcard path matching
+server.fn_handler("/signalk/v1/api/*", Method::Get, move |req| {
+    let path = req.uri().path().strip_prefix("/signalk/v1/api/").unwrap_or("");
+
+    if let Ok(store) = api_store.lock() {
+        if let Some(value) = store.get_path(path) {
+            let json = serde_json::to_string(value)?;
+            let mut response = req.into_ok_response()?;
+            response.write_all(json.as_bytes())?;
+            return Ok(());
+        }
+    }
+
+    // Return 404 for unknown paths
+    let mut response = req.into_status_response(404)?;
+    response.write_all(b"{\"error\": \"Path not found\"}")?;
+    Ok(())
+})?;
+```
+
+**Changes Required:**
+1. Add wildcard route handler in `start_http_server`
+2. Implement path lookup in `MemoryStore` (may already exist)
+3. Return proper 404 for unknown paths
+
+**Files to Modify:**
+- `bins/signalk-server-esp32/src/main.rs` - New route handler
+
+### 11.6 Features NOT Planned for ESP32
+
+These features are intentionally excluded:
+
+| Feature | Reason |
+|---------|--------|
+| Admin UI | Flash storage (~4MB) cannot hold 50MB+ React app |
+| Plugin System | Runtime code loading not feasible on MCU |
+| Server Events | Only needed for Admin UI dashboard |
+| Full REST Management | `/skServer/*` endpoints too complex |
+| User Authentication | Complexity; use WiFi security instead |
+| Period/Policy Throttling | CPU overhead; clients can filter locally |
+| Statistics Collection | Memory overhead; minimal value on embedded |
+| Backup/Restore | No filesystem to back up |
+| mDNS Discovery | Lower priority; can add later |
+
+### 11.7 ESP32 vs Linux Feature Matrix
+
+| Feature | Linux | ESP32 | Notes |
+|---------|-------|-------|-------|
+| **Core Protocol** |
+| Delta Broadcasting | ✅ | ✅ | Both complete |
+| WebSocket Hello | ✅ | ✅ | Spec-compliant |
+| REST Discovery | ✅ | ✅ | `/signalk` |
+| REST Full API | ✅ | ✅ | `/signalk/v1/api` |
+| REST Path API | ✅ | ✅ | `/signalk/v1/api/*` |
+| **Subscription** |
+| Query params | ✅ | ⚠️ | Blocked: esp-idf-svc limitation |
+| Subscribe message | ✅ | ✅ | Complete |
+| Unsubscribe message | ✅ | ✅ | Complete |
+| Path pattern filtering | ✅ | ✅ | Complete |
+| Period throttling | ✅ | ❌ | Not planned |
+| **Admin** |
+| Admin UI | ✅ | ❌ | Flash constraints |
+| Server Events | ✅ | ❌ | Not needed |
+| Statistics | ✅ | ❌ | Not planned |
+| **Data Providers** |
+| NMEA 0183 | 🔄 | 📋 | Future |
+| NMEA 2000 (CAN) | 🔄 | 📋 | Future |
+| Demo Generator | ✅ | ✅ | Both complete |
+| **Storage** |
+| File Config | ✅ | ❌ | Uses NVS (future) |
+| NVS Config | ❌ | 📋 | Planned |
+
+Legend: ✅ Complete | 🔄 In Progress | 📋 Planned | ❌ Not Planned | ⚠️ Blocked
+
+### 11.8 Testing ESP32 Implementation
+
+**Connect and test with websocat:**
+```bash
+# Basic connection - should receive hello + full model + deltas
+websocat ws://<esp32-ip>/signalk/v1/stream
+
+# After subscription support:
+websocat ws://<esp32-ip>/signalk/v1/stream?subscribe=none
+# Then send: {"context":"vessels.self","subscribe":[{"path":"navigation.*"}]}
+```
+
+**Test REST API:**
+```bash
+# Discovery
+curl http://<esp32-ip>/signalk
+
+# Full model
+curl http://<esp32-ip>/signalk/v1/api
+
+# Path query (after implementation)
+curl http://<esp32-ip>/signalk/v1/api/vessels/self/navigation/position
+```
+
+**Monitor serial output:**
+```bash
+espflash monitor
+# Or
+cargo run --release  # Includes monitor
+```
 
 ---
 

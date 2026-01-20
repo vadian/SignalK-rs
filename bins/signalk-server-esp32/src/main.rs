@@ -53,7 +53,11 @@ use serde_json::json;
 use signalk_core::{Delta, MemoryStore, PathValue, SignalKStore, Update};
 use signalk_esp32::{
     config::ServerConfig,
-    http::{create_discovery_json, create_hello_message, current_timestamp},
+    http::{
+        create_discovery_json, create_hello_message, current_timestamp,
+        default_subscription_for_mode, get_path_json, process_client_message, ClientSubscription,
+        SubscribeMode, WsQueryParams,
+    },
     wifi::connect_wifi,
 };
 use std::{
@@ -63,9 +67,45 @@ use std::{
     time::Duration,
 };
 
-/// Type alias for the collection of connected WebSocket clients
-/// Key is a unique client ID (we'll use the fd from the detached sender)
-type WsClients = Arc<Mutex<HashMap<i32, EspHttpWsDetachedSender>>>;
+// ============================================================================
+// Client State Management
+// ============================================================================
+
+/// Per-client state including sender and subscription info.
+struct ClientState {
+    /// Detached sender for async delta broadcasting.
+    sender: EspHttpWsDetachedSender,
+    /// Client's subscription state.
+    subscription: ClientSubscription,
+}
+
+/// Type alias for the collection of connected WebSocket clients.
+/// Key is the session ID (socket fd).
+type WsClients = Arc<Mutex<HashMap<i32, ClientState>>>;
+
+/// Check if a delta should be sent to a client based on their subscription.
+fn should_send_delta(subscription: &ClientSubscription, delta: &Delta) -> bool {
+    // If no subscription, don't send anything
+    if subscription.is_empty() {
+        return false;
+    }
+
+    // Check context filter
+    if !subscription.matches_context(delta.context.as_deref()) {
+        return false;
+    }
+
+    // Check if any path in the delta matches the subscription
+    for update in &delta.updates {
+        for pv in &update.values {
+            if subscription.matches_path(&pv.path) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
 
 // WiFi credentials - set via environment variables at build time
 // Example: WIFI_SSID="MyNetwork" WIFI_PASSWORD="secret" cargo build
@@ -129,14 +169,21 @@ fn main() -> Result<()> {
                     store.apply_delta(&delta);
                 }
 
-                // Broadcast delta to all connected WebSocket clients
+                // Broadcast delta to subscribed WebSocket clients
                 if let Ok(json) = serde_json::to_string(&delta) {
                     if let Ok(mut clients) = clients_processor.lock() {
                         // Collect failed client IDs for removal
                         let mut failed_clients = Vec::new();
 
-                        for (client_id, sender) in clients.iter_mut() {
-                            if let Err(e) = sender.send(FrameType::Text(false), json.as_bytes()) {
+                        for (client_id, client_state) in clients.iter_mut() {
+                            // Check subscription filter
+                            if !should_send_delta(&client_state.subscription, &delta) {
+                                continue;
+                            }
+
+                            if let Err(e) =
+                                client_state.sender.send(FrameType::Text(false), json.as_bytes())
+                            {
                                 warn!("Failed to send delta to client {}: {:?}", client_id, e);
                                 failed_clients.push(*client_id);
                             }
@@ -215,7 +262,7 @@ fn start_http_server(
         Ok::<(), SignalKError>(())
     })?;
 
-    // REST API: GET /signalk/v1/api
+    // REST API: GET /signalk/v1/api (full model)
     let api_store = Arc::clone(&store);
     server.fn_handler(
         "/signalk/v1/api",
@@ -233,6 +280,54 @@ fn start_http_server(
         },
     )?;
 
+    // REST API: GET /signalk/v1/api/* (path query)
+    // Note: esp-idf-svc requires explicit wildcard routes
+    let api_path_store = Arc::clone(&store);
+    server.fn_handler(
+        "/signalk/v1/api/*",
+        esp_idf_svc::http::Method::Get,
+        move |req| {
+            // Extract path after /signalk/v1/api/
+            let uri = req.uri();
+            let path = uri
+                .strip_prefix("/signalk/v1/api/")
+                .unwrap_or("")
+                .split('?')
+                .next()
+                .unwrap_or("");
+
+            if path.is_empty() {
+                // Should have been handled by the exact route above
+                let json = if let Ok(store) = api_path_store.lock() {
+                    serde_json::to_string(store.full_model())?
+                } else {
+                    r#"{"error": "Store locked"}"#.to_string()
+                };
+                let mut response = req.into_ok_response()?;
+                response.write_all(json.as_bytes())?;
+                return Ok::<(), SignalKError>(());
+            }
+
+            // Convert URL path (with /) to SignalK path (with .)
+            let sk_path = path.replace('/', ".");
+
+            match get_path_json(&api_path_store, &sk_path) {
+                Ok(json) => {
+                    let mut response = req.into_ok_response()?;
+                    response.write_all(json.as_bytes())?;
+                }
+                Err(_) => {
+                    // Return 404 for unknown paths
+                    let error_json = format!(r#"{{"error": "Path not found: {}"}}"#, sk_path);
+                    let mut response = req.into_response(404, Some("Not Found"), &[])?;
+                    response.write_all(error_json.as_bytes())?;
+                }
+            }
+
+            Ok::<(), SignalKError>(())
+        },
+    )?;
+
     // WebSocket endpoint: GET /signalk/v1/stream
     let ws_name = config_name.clone();
     let ws_version = config_version.clone();
@@ -245,7 +340,15 @@ fn start_http_server(
 
         // Handle new connection
         if ws.is_new() {
-            info!("WebSocket client {} connected", client_id);
+            // Note: esp-idf-svc doesn't expose URI on WebSocket connections,
+            // so we use default query params (subscribe=self, sendCachedValues=true).
+            // Clients can modify subscriptions via subscribe/unsubscribe messages.
+            let query_params = WsQueryParams::default();
+
+            info!(
+                "WebSocket client {} connected (subscribe={:?}, sendCachedValues={})",
+                client_id, query_params.subscribe, query_params.send_cached_values
+            );
 
             // Send hello message using shared helper
             let hello_msg = create_hello_message(&ws_name, &ws_version, &ws_self_urn);
@@ -258,24 +361,42 @@ fn start_http_server(
             }
 
             // Send current state if sendCachedValues is true (default)
-            if let Ok(store) = ws_store.lock() {
-                let full_model = store.full_model();
-                if let Ok(json) = serde_json::to_string(&full_model) {
-                    let _ = ws.send(FrameType::Text(false), json.as_bytes());
+            if query_params.send_cached_values {
+                if let Ok(store) = ws_store.lock() {
+                    let full_model = store.full_model();
+                    if let Ok(json) = serde_json::to_string(&full_model) {
+                        let _ = ws.send(FrameType::Text(false), json.as_bytes());
+                    }
                 }
             }
+
+            // Create default subscription based on query parameter
+            let subscription = default_subscription_for_mode(query_params.subscribe);
 
             // Create detached sender for this client and register it
             // This allows the delta processor thread to push updates to this client
             match ws.create_detached_sender() {
                 Ok(sender) => {
                     if let Ok(mut clients) = ws_clients_handler.lock() {
-                        clients.insert(client_id, sender);
-                        info!("Registered client {} for delta streaming ({} total)", client_id, clients.len());
+                        clients.insert(
+                            client_id,
+                            ClientState {
+                                sender,
+                                subscription,
+                            },
+                        );
+                        info!(
+                            "Registered client {} for delta streaming ({} total)",
+                            client_id,
+                            clients.len()
+                        );
                     }
                 }
                 Err(e) => {
-                    error!("Failed to create detached sender for client {}: {:?}", client_id, e);
+                    error!(
+                        "Failed to create detached sender for client {}: {:?}",
+                        client_id, e
+                    );
                 }
             }
 
@@ -288,7 +409,11 @@ fn start_http_server(
             // Remove client from broadcast list
             if let Ok(mut clients) = ws_clients_handler.lock() {
                 clients.remove(&client_id);
-                info!("WebSocket client {} disconnected ({} remaining)", client_id, clients.len());
+                info!(
+                    "WebSocket client {} disconnected ({} remaining)",
+                    client_id,
+                    clients.len()
+                );
             }
             return Ok::<(), SignalKError>(());
         }
@@ -312,7 +437,23 @@ fn start_http_server(
             FrameType::Text(_) if len > 0 => {
                 if let Ok(text) = std::str::from_utf8(&buf[..len]) {
                     info!("Received from client {}: {}", client_id, text);
-                    // TODO: Handle subscription messages
+
+                    // Try to parse and process subscription messages
+                    if let Ok(mut clients) = ws_clients_handler.lock() {
+                        if let Some(client_state) = clients.get_mut(&client_id) {
+                            if let Some(new_sub) =
+                                process_client_message(text, &client_state.subscription)
+                            {
+                                info!(
+                                    "Client {} subscription updated: context={:?}, patterns={}",
+                                    client_id,
+                                    new_sub.context,
+                                    new_sub.patterns.len()
+                                );
+                                client_state.subscription = new_sub;
+                            }
+                        }
+                    }
                 }
             }
             FrameType::Close => {

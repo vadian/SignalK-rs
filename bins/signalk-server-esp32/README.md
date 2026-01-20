@@ -8,7 +8,11 @@ A minimal Signal K server implementation for ESP32 (Xtensa) microcontrollers wit
   - Hello message on connect
   - Full model sent on connect (sendCachedValues)
   - Live delta broadcasting via `EspHttpWsDetachedSender`
-- **REST API** at `http://<ip>/signalk/v1/api`
+  - Subscribe/unsubscribe message support for filtering
+  - Path pattern matching with wildcards (e.g., `navigation.*`)
+- **REST API**
+  - `GET /signalk/v1/api` - Full data model
+  - `GET /signalk/v1/api/vessels/self/navigation/position` - Path queries
 - **Discovery endpoint** at `http://<ip>/signalk`
 - **Demo data generator** for testing (position, SOG, COG updates every second)
 
@@ -239,6 +243,8 @@ bins/signalk-server-esp32/
 
 ## Testing
 
+### Basic Connection
+
 Connect with websocat to verify delta streaming:
 
 ```bash
@@ -250,6 +256,41 @@ You should see:
 2. Full model with current state
 3. Delta updates every second (from demo generator)
 
+### Subscription Filtering
+
+After connecting, you can send subscribe/unsubscribe messages to filter deltas:
+
+```bash
+# Connect
+websocat ws://<esp32-ip>/signalk/v1/stream
+
+# Then send subscription message (paste into websocat):
+{"context":"vessels.self","subscribe":[{"path":"navigation.position"}]}
+
+# Now you'll only receive position updates, not SOG/COG
+
+# Unsubscribe from all:
+{"context":"*","unsubscribe":[{"path":"*"}]}
+```
+
+Path patterns support wildcards:
+- `navigation.*` - All navigation paths
+- `propulsion.*.revolutions` - Any engine's revolutions
+- `*` - Everything
+
+### REST API Testing
+
+```bash
+# Full model
+curl http://<esp32-ip>/signalk/v1/api
+
+# Specific path (use / instead of . in URL)
+curl http://<esp32-ip>/signalk/v1/api/vessels/self/navigation/position
+
+# Discovery
+curl http://<esp32-ip>/signalk
+```
+
 ## Future Work
 
 - [ ] NVS configuration storage
@@ -257,5 +298,4 @@ You should see:
 - [ ] mDNS service discovery
 - [ ] NMEA 0183 input (UART)
 - [ ] NMEA 2000 input (CAN)
-- [ ] Subscription filtering (currently broadcasts all deltas)
 - [ ] Simple HTML status page
