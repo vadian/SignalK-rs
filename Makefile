@@ -3,7 +3,8 @@
 
 .PHONY: help test test-unit test-integration test-core test-server test-all \
         build build-release run run-release clean check fmt clippy doc \
-        watch watch-test install pre-commit bench
+        watch watch-test install pre-commit bench \
+        build-esp build-esp-release run-esp run-esp-release clean-esp esp-size esp-size-release
 
 # Default target
 .DEFAULT_GOAL := help
@@ -218,3 +219,61 @@ release-check: ## Check if ready for release
 version: ## Show current version
 	@echo "$(BLUE)Current version:$(NC)"
 	@cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4
+
+##@ ESP32 (requires esp-idf toolchain)
+
+# ESP32 sdkconfig files - used for dependency tracking
+ESP_SDKCONFIG_BASE := sdkconfig.defaults
+ESP_SDKCONFIG_DEV := sdkconfig.defaults.dev
+ESP_SDKCONFIG_RELEASE := sdkconfig.defaults.release
+ESP_TARGET_DIR := bins/signalk-server-esp32/target
+
+# Helper to check if sdkconfig changed and clean is needed
+define check_esp_sdkconfig
+	@if [ -d "$(ESP_TARGET_DIR)" ]; then \
+		for cfg in $(1); do \
+			if [ "$$cfg" -nt "$(ESP_TARGET_DIR)/.sdkconfig_stamp" ] 2>/dev/null; then \
+				echo "$(YELLOW)sdkconfig changed, cleaning ESP32 build...$(NC)"; \
+				rm -rf $(ESP_TARGET_DIR); \
+				break; \
+			fi; \
+		done; \
+	fi
+	@mkdir -p $(ESP_TARGET_DIR) && touch $(ESP_TARGET_DIR)/.sdkconfig_stamp
+endef
+
+build-esp: ## Build ESP32 (dev, 3MB partition)
+	$(call check_esp_sdkconfig,$(ESP_SDKCONFIG_BASE) $(ESP_SDKCONFIG_DEV))
+	cd bins/signalk-server-esp32 && \
+	ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.dev" \
+	cargo build
+
+build-esp-release: ## Build ESP32 (release, OTA partitions)
+	$(call check_esp_sdkconfig,$(ESP_SDKCONFIG_BASE) $(ESP_SDKCONFIG_RELEASE))
+	cd bins/signalk-server-esp32 && \
+	ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.release" \
+	cargo build --release
+
+run-esp: ## Build and flash ESP32 (dev, 3MB partition)
+	$(call check_esp_sdkconfig,$(ESP_SDKCONFIG_BASE) $(ESP_SDKCONFIG_DEV))
+	cd bins/signalk-server-esp32 && \
+	ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.dev" \
+	cargo run
+
+run-esp-release: ## Build and flash ESP32 (release, OTA partitions)
+	$(call check_esp_sdkconfig,$(ESP_SDKCONFIG_BASE) $(ESP_SDKCONFIG_RELEASE))
+	cd bins/signalk-server-esp32 && \
+	ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.release" \
+	cargo run --release
+
+clean-esp: ## Clean ESP32 build artifacts
+	@echo "$(RED)Cleaning ESP32 build...$(NC)"
+	@rm -rf $(ESP_TARGET_DIR)
+
+esp-size: ## Show ESP32 binary size (dev)
+	@echo "$(BLUE)ESP32 binary size (dev):$(NC)"
+	@xtensa-esp32-elf-size bins/signalk-server-esp32/target/xtensa-esp32-espidf/debug/signalk-server-esp32
+
+esp-size-release: ## Show ESP32 binary size (release)
+	@echo "$(BLUE)ESP32 binary size (release):$(NC)"
+	@xtensa-esp32-elf-size bins/signalk-server-esp32/target/xtensa-esp32-espidf/release/signalk-server-esp32

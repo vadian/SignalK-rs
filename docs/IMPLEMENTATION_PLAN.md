@@ -827,6 +827,9 @@ fn main() -> Result<()> {
 - [x] Multi-client support with proper cleanup
 - [x] Thread stack sizing (16KB) for FreeRTOS compatibility
 - [x] Documentation in README.md and ARCHITECTURE.md
+- [x] Dev/Release build configuration with separate sdkconfig files
+- [x] Partition tables: 3MB factory (dev) and OTA layout (release)
+- [x] Makefile targets: `run-esp`, `run-esp-release`, `build-esp`, `build-esp-release`
 
 **Completed - Feature Parity:**
 - [x] Subscribe/unsubscribe message parsing
@@ -1217,7 +1220,57 @@ These features are intentionally excluded:
 
 Legend: ✅ Complete | 🔄 In Progress | 📋 Planned | ❌ Not Planned | ⚠️ Blocked
 
-### 11.8 Testing ESP32 Implementation
+### 11.8 ESP32 Build Configuration
+
+The ESP32 build system supports separate development and release configurations optimized for different use cases.
+
+**Build Commands:**
+```bash
+# Development builds (3MB partition, full debugging)
+make build-esp          # Build only
+make run-esp            # Build and flash
+
+# Release builds (OTA partitions, size-optimized)
+make build-esp-release  # Build only
+make run-esp-release    # Build and flash
+
+# Check binary sizes
+make esp-size           # Dev binary size
+make esp-size-release   # Release binary size
+```
+
+**Configuration Files:**
+| File | Purpose |
+|------|---------|
+| `sdkconfig.defaults` | Shared base ESP-IDF config (WiFi, WebSocket, stack sizes) |
+| `sdkconfig.defaults.dev` | Development overrides (3MB partition, INFO logging) |
+| `sdkconfig.defaults.release` | Production overrides (OTA partitions, -Os, WARN logging) |
+| `partitions.dev.csv` | 3MB single factory partition (no OTA) |
+| `partitions.release.csv` | OTA layout with 2x 1.5MB app partitions |
+
+**Build Configurations:**
+| Aspect | Development | Production |
+|--------|-------------|------------|
+| Cargo profile | `debug` | `release` |
+| Partition table | 3MB factory | OTA (2x 1.5MB) |
+| ESP-IDF optimization | `-O2` (faster builds) | `-Os` (size) |
+| Rust optimizations | None | LTO, `opt-level = "s"` |
+| Logging level | INFO | WARN |
+| Max binary size | < 3 MB | < 1.5 MB |
+
+**Release Profile (`bins/signalk-server-esp32/Cargo.toml`):**
+```toml
+[profile.release]
+opt-level = "s"          # Optimize for size
+lto = true               # Link-time optimization
+codegen-units = 1        # Better optimization
+panic = "abort"          # Smaller than unwinding
+debug = 1                # Line tables only (keeps backtraces readable)
+```
+
+See [ESP32_BINARY_SIZE_PLAN.md](ESP32_BINARY_SIZE_PLAN.md) for detailed size reduction strategies.
+
+### 11.9 Testing ESP32 Implementation
 
 **Connect and test with websocat:**
 ```bash

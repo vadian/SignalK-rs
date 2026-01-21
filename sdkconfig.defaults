@@ -3,6 +3,9 @@
 # NOTE: This file is used by esp-idf-sys when building from anywhere in the workspace.
 # See bins/signalk-server-esp32/README.md for details on sdkconfig.defaults location.
 
+# Flash size - most ESP32 dev boards have 4MB flash
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
 # Stack sizes - Rust needs more than C defaults
 # Main task stack (default is 3KB, Rust needs ~16KB for JSON serialization)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

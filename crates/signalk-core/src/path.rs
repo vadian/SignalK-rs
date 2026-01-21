@@ -3,9 +3,9 @@
 //! SignalK paths are dot-separated strings like "navigation.speedOverGround".
 //! This module provides utilities for parsing paths and matching them against
 //! subscription patterns that may include wildcards.
-
-use regex::Regex;
-use std::sync::OnceLock;
+//!
+//! Pattern matching uses simple glob-style matching without regex to minimize
+//! memory usage on embedded platforms (ESP32).
 
 /// A parsed SignalK path.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +65,16 @@ impl From<String> for Path {
     }
 }
 
+/// A segment in a path pattern.
+#[derive(Debug, Clone, PartialEq)]
+enum PatternSegment {
+    /// Exact literal match for this segment
+    Literal(String),
+    /// Single wildcard (*) - matches exactly one segment when mid-path,
+    /// or any suffix when at the end
+    Wildcard,
+}
+
 /// A subscription pattern that may contain wildcards.
 ///
 /// Supported patterns:
@@ -72,64 +82,98 @@ impl From<String> for Path {
 /// - Suffix wildcard: "navigation.*"
 /// - Mid-path wildcard: "propulsion.*.revolutions"
 /// - Full wildcard: "*"
+///
+/// Uses simple segment-based matching instead of regex to minimize memory
+/// usage on embedded platforms like ESP32.
 #[derive(Debug, Clone)]
 pub struct PathPattern {
     raw: String,
-    regex: Regex,
+    segments: Vec<PatternSegment>,
+    /// True if the pattern ends with a wildcard (matches any suffix)
+    trailing_wildcard: bool,
 }
 
 impl PathPattern {
     /// Create a new path pattern.
     ///
-    /// Converts SignalK wildcard syntax to regex:
-    /// - `*` at end matches any suffix
-    /// - `*` in middle matches exactly one segment
+    /// Pattern syntax:
+    /// - `*` at end matches any suffix (e.g., "navigation.*" matches "navigation.position.latitude")
+    /// - `*` in middle matches exactly one segment (e.g., "propulsion.*.revolutions")
+    /// - `*` alone matches any path
     pub fn new(pattern: &str) -> Result<Self, PatternError> {
-        let regex_str = Self::pattern_to_regex(pattern);
-        let regex =
-            Regex::new(&regex_str).map_err(|e| PatternError::InvalidRegex(e.to_string()))?;
+        let raw = pattern.to_string();
+        let parts: Vec<&str> = pattern.split('.').collect();
+
+        // Check for empty pattern
+        if parts.is_empty() || (parts.len() == 1 && parts[0].is_empty()) {
+            return Err(PatternError::EmptyPattern);
+        }
+
+        let trailing_wildcard = parts.last() == Some(&"*");
+
+        let segments: Vec<PatternSegment> = parts
+            .iter()
+            .map(|&s| {
+                if s == "*" {
+                    PatternSegment::Wildcard
+                } else {
+                    PatternSegment::Literal(s.to_string())
+                }
+            })
+            .collect();
 
         Ok(Self {
-            raw: pattern.to_string(),
-            regex,
+            raw,
+            segments,
+            trailing_wildcard,
         })
-    }
-
-    /// Convert a SignalK pattern to a regex string.
-    fn pattern_to_regex(pattern: &str) -> String {
-        if pattern == "*" {
-            return "^.*$".to_string();
-        }
-
-        let mut regex = String::from("^");
-        let segments: Vec<&str> = pattern.split('.').collect();
-
-        for (i, segment) in segments.iter().enumerate() {
-            if i > 0 {
-                regex.push_str(r"\.");
-            }
-
-            if *segment == "*" {
-                if i == segments.len() - 1 {
-                    // Trailing wildcard: match any suffix
-                    regex.push_str(r".*");
-                } else {
-                    // Mid-path wildcard: match exactly one segment
-                    regex.push_str(r"[^.]+");
-                }
-            } else {
-                // Escape special regex characters and add literal segment
-                regex.push_str(&regex::escape(segment));
-            }
-        }
-
-        regex.push('$');
-        regex
     }
 
     /// Check if a path matches this pattern.
     pub fn matches(&self, path: &str) -> bool {
-        self.regex.is_match(path)
+        let path_parts: Vec<&str> = path.split('.').collect();
+
+        // Special case: single wildcard matches everything
+        if self.segments.len() == 1 && self.segments[0] == PatternSegment::Wildcard {
+            return true;
+        }
+
+        // If trailing wildcard, path must have at least (pattern_len - 1) segments
+        // If no trailing wildcard, path must have exactly pattern_len segments
+        if self.trailing_wildcard {
+            if path_parts.len() < self.segments.len() - 1 {
+                return false;
+            }
+        } else if path_parts.len() != self.segments.len() {
+            return false;
+        }
+
+        // Match each segment
+        for (i, segment) in self.segments.iter().enumerate() {
+            match segment {
+                PatternSegment::Literal(lit) => {
+                    if i >= path_parts.len() || path_parts[i] != lit {
+                        return false;
+                    }
+                }
+                PatternSegment::Wildcard => {
+                    // Trailing wildcard matches any remaining suffix
+                    if self.trailing_wildcard && i == self.segments.len() - 1 {
+                        return true;
+                    }
+                    // Mid-path wildcard must have a corresponding path segment
+                    if i >= path_parts.len() {
+                        return false;
+                    }
+                    // Wildcard matches any single segment (non-empty)
+                    if path_parts[i].is_empty() {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     /// Get the raw pattern string.
@@ -141,8 +185,8 @@ impl PathPattern {
 /// Errors that can occur when creating a path pattern.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum PatternError {
-    #[error("Invalid regex: {0}")]
-    InvalidRegex(String),
+    #[error("Empty pattern")]
+    EmptyPattern,
 }
 
 #[cfg(test)]

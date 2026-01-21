@@ -10,7 +10,18 @@ rust-version = "1.82"
 name = "signalk-server-esp32"
 path = "src/main.rs"
 
-# Note: Profile settings for ESP32 (opt-level, lto) are in workspace Cargo.toml
+# Dev profile - must fit in ESP32 IRAM (~400KB code segment)
+[profile.dev]
+opt-level = "s"          # Size optimization required for ESP32 IRAM
+debug = true             # Full debug info
+
+# Release profile - must fit in 1.5MB OTA partition
+[profile.release]
+opt-level = "s"          # Optimize for size
+lto = true               # Link-time optimization
+codegen-units = 1        # Better optimization, slower compile
+panic = "abort"          # Smaller than unwinding
+debug = 1                # Line tables only (keeps backtraces readable)
 
 [features]
 default = ["std", "esp-idf-svc/native"]

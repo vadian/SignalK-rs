@@ -1,0 +1,23 @@
+# Development configuration
+# - Large partition for binaries (3MB)
+# - Full debugging support (INFO logging)
+# - Size-optimized to fit in ESP32 IRAM
+#
+# Usage: Default for `cargo build` from bins/signalk-server-esp32/
+
+# Use 3MB single partition (no OTA)
+# Note: Path is relative to esp-idf-sys build output dir (target/.../build/esp-idf-sys-.../out/)
+# Goes up 8 levels to workspace root: out -> esp-idf-sys-* -> build -> debug -> xtensa-esp32-espidf -> target -> signalk-server-esp32 -> bins -> [root]
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../../../../../../partitions.dev.csv"
+
+# Optimize for size (required to fit in ESP32 IRAM segment)
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Full logging for debugging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Disable unused components to speed up builds
+CONFIG_ETH_ENABLED=n
+CONFIG_MQTT_ENABLE=n
+CONFIG_FATFS_ENABLED=n

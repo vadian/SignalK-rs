@@ -349,7 +349,7 @@ fn start_http_server(
     let ws_name = config_name.clone();
     let ws_version = config_version.clone();
     let ws_self_urn = config_self_urn.clone();
-    let ws_store = Arc::clone(&store);
+    // Note: ws_store removed - sendCachedValues disabled due to ESP32 heap constraints
     let ws_clients_handler: WsClients = Arc::clone(&ws_clients);
 
     server.ws_handler("/signalk/v1/stream", move |ws| {
@@ -377,14 +377,11 @@ fn start_http_server(
                 }
             }
 
-            // Send current state if sendCachedValues is true (default)
+            // Note: sendCachedValues is disabled on ESP32 due to heap constraints.
+            // Serializing the full model requires ~200KB allocation which exceeds
+            // available heap. Clients receive deltas immediately after connecting.
             if query_params.send_cached_values {
-                if let Ok(store) = ws_store.lock() {
-                    let full_model = store.full_model();
-                    if let Ok(json) = serde_json::to_string(&full_model) {
-                        let _ = ws.send(FrameType::Text(false), json.as_bytes());
-                    }
-                }
+                info!("sendCachedValues skipped (ESP32 heap constraint)");
             }
 
             // Create default subscription based on query parameter

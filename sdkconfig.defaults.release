@@ -1,0 +1,29 @@
+# Production configuration
+# - OTA-compatible partition layout (2x 1.5MB)
+# - Size optimizations (-Os)
+# - Reduced logging
+#
+# Usage: ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.release" cargo build --release
+
+# Use OTA partition layout
+# Note: Path is relative to esp-idf-sys build output dir (target/.../build/esp-idf-sys-.../out/)
+# Goes up 8 levels to workspace root: out -> esp-idf-sys-* -> build -> debug -> xtensa-esp32-espidf -> target -> signalk-server-esp32 -> bins -> [root]
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../../../../../../partitions.release.csv"
+
+# Optimize for size
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+CONFIG_COMPILER_CXX_RTTI=n
+
+# Reduce logging (WARN level)
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+
+# Disable unused components
+CONFIG_ETH_ENABLED=n
+CONFIG_MQTT_ENABLE=n
+CONFIG_FATFS_ENABLED=n
+CONFIG_ESP_DRIVER_MCPWM_ENABLED=n
+CONFIG_LCD_ENABLE=n
+CONFIG_SDMMC_ENABLED=n
+CONFIG_I2S_ENABLE=n

@@ -25,22 +25,56 @@ signalk-rs/
     └── signalk-server-esp32/   # Embedded server (no plugins)
 ```
 
-## Building
-
-### Linux (default)
+## Quick Start
 
 ```bash
-cargo build --release
-cargo run --bin signalk-server
+make help          # Show all available commands
+make run           # Start server in debug mode (port 4000)
+make test          # Run all tests
 ```
+
+## Building
+
+All builds use `make` targets. Run `make help` for the full list.
+
+### Linux Server
+
+```bash
+make build              # Build debug
+make build-release      # Build optimized release
+make run                # Run debug server
+make run-release        # Run release server
+```
+
+The server runs on port 4000:
+- WebSocket: `ws://localhost:4000/signalk/v1/stream`
+- REST API: `http://localhost:4000/signalk/v1/api`
+- Admin UI: `http://localhost:4000/admin/`
 
 ### ESP32
 
-Requires ESP32 Rust toolchain. See [esp-rs documentation](https://esp-rs.github.io/book/).
+Requires ESP-IDF toolchain. See [esp-rs documentation](https://esp-rs.github.io/book/).
 
 ```bash
-# After toolchain setup:
-cargo build --release --bin signalk-server-esp32
+make build-esp          # Build dev (3MB partition)
+make build-esp-release  # Build release (OTA partitions)
+make run-esp            # Build and flash (dev)
+make run-esp-release    # Build and flash (release)
+make esp-size           # Show binary size
+```
+
+## Development
+
+```bash
+make test           # Run all tests
+make test-core      # Test signalk-core only
+make test-server    # Test signalk-server only
+make clippy         # Run linter
+make fmt            # Format code
+make ci             # Full CI checks (format, lint, test)
+make pre-commit     # Pre-commit checks
+make watch          # Watch for changes and rebuild
+make watch-run      # Watch and restart server on changes
 ```
 
 ## Status

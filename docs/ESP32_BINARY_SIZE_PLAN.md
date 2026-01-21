@@ -171,33 +171,35 @@ panic = "abort"          # Smaller than unwinding
 debug = 1                # Line tables only (keeps backtraces readable)
 ```
 
-### 0.4 Add Makefile Targets (Optional)
+### 0.4 Makefile Targets ✅
 
-Add to workspace `Makefile`:
+The following targets are available in the workspace `Makefile`:
 
+```bash
+# Build and flash in one step (recommended)
+make run-esp           # Dev build (3MB partition, full debugging)
+make run-esp-release   # Release build (OTA partitions, size-optimized)
+
+# Build only
+make build-esp         # Dev build
+make build-esp-release # Release build
+
+# Check binary size
+make esp-size          # Dev binary size
+make esp-size-release  # Release binary size
+```
+
+**Implementation:**
 ```makefile
-# ESP32 builds
-esp32-dev:
-	cd bins/signalk-server-esp32 && cargo build
-
-esp32-release:
+run-esp: ## Build and flash ESP32 (dev, 3MB partition)
 	cd bins/signalk-server-esp32 && \
-	ESP_IDF_SDKCONFIG_DEFAULTS=../../sdkconfig.defaults.release \
-	cargo build --release
+	ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.dev" \
+	cargo run
 
-esp32-flash-dev:
-	cd bins/signalk-server-esp32 && cargo run
-
-esp32-flash-release:
+run-esp-release: ## Build and flash ESP32 (release, OTA partitions)
 	cd bins/signalk-server-esp32 && \
-	ESP_IDF_SDKCONFIG_DEFAULTS=../../sdkconfig.defaults.release \
+	ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.release" \
 	cargo run --release
-
-esp32-size:
-	xtensa-esp32-elf-size bins/signalk-server-esp32/target/xtensa-esp32-espidf/debug/signalk-server-esp32
-
-esp32-size-release:
-	xtensa-esp32-elf-size bins/signalk-server-esp32/target/xtensa-esp32-espidf/release/signalk-server-esp32
 ```
 
 ---

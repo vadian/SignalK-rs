@@ -328,10 +328,25 @@ ESP32 requires the Espressif Rust toolchain (installed via `espup`). The `rust-t
 cargo install espup && espup install
 . $HOME/export-esp.sh  # Source ESP environment
 
-# Build and flash ESP32 binary
+# Build and flash ESP32 binary using Makefile targets
+WIFI_SSID="network" WIFI_PASSWORD="pass" make run-esp          # Dev build
+WIFI_SSID="network" WIFI_PASSWORD="pass" make run-esp-release  # Release build
+
+# Or manually:
 cd bins/signalk-server-esp32
-WIFI_SSID="network" WIFI_PASSWORD="pass" cargo run --release
+WIFI_SSID="network" WIFI_PASSWORD="pass" \
+ESP_IDF_SDKCONFIG_DEFAULTS="../../sdkconfig.defaults;../../sdkconfig.defaults.dev" \
+cargo run
 ```
+
+**Build Configurations:**
+
+| Target | Partition | Optimizations | Max Size |
+|--------|-----------|---------------|----------|
+| `make run-esp` | 3MB factory | Debug (-O2) | 3 MB |
+| `make run-esp-release` | OTA (2x 1.5MB) | Size (-Os, LTO) | 1.5 MB |
+
+See [ESP32_BINARY_SIZE_PLAN.md](./ESP32_BINARY_SIZE_PLAN.md) for details on size optimization.
 
 **Known Issue - sdkconfig.defaults Location:**
 
