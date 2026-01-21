@@ -4,7 +4,8 @@
 .PHONY: help test test-unit test-integration test-core test-server test-all \
         build build-release run run-release clean check fmt clippy doc \
         watch watch-test install pre-commit bench \
-        build-esp build-esp-release run-esp run-esp-release clean-esp esp-size esp-size-release
+        build-esp build-esp-release run-esp run-esp-release clean-esp esp-size esp-size-release \
+        test-ws test-ws-esp test-ws-hello test-ws-subscribe test-ws-throttle test-ws-paths test-ws-delta
 
 # Default target
 .DEFAULT_GOAL := help
@@ -277,3 +278,38 @@ esp-size: ## Show ESP32 binary size (dev)
 esp-size-release: ## Show ESP32 binary size (release)
 	@echo "$(BLUE)ESP32 binary size (release):$(NC)"
 	@xtensa-esp32-elf-size bins/signalk-server-esp32/target/xtensa-esp32-espidf/release/signalk-server-esp32
+
+##@ WebSocket Integration Tests (requires running server)
+
+test-ws: ## Run all WebSocket integration tests (requires server on localhost:4000)
+	@echo "$(GREEN)Running WebSocket tests against localhost:4000...$(NC)"
+	@bash tests/integration/run_all.sh
+
+test-ws-esp: ## Run WebSocket tests against ESP32 (set SIGNALK_HOST)
+	@if [ -z "$(SIGNALK_HOST)" ]; then \
+		echo "$(RED)ERROR: Set SIGNALK_HOST to your ESP32 IP address$(NC)"; \
+		echo "  Example: make test-ws-esp SIGNALK_HOST=192.168.1.100"; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)Running integration tests against $(SIGNALK_HOST):$(SIGNALK_PORT:-80)...$(NC)"
+	@SIGNALK_HOST=$(SIGNALK_HOST) SIGNALK_PORT=$(or $(SIGNALK_PORT),80) bash tests/integration/run_all.sh
+
+test-ws-hello: ## Quick test: WebSocket hello message
+	@echo "$(GREEN)Testing WebSocket hello message...$(NC)"
+	@bash tests/integration/01_hello.sh
+
+test-ws-subscribe: ## Quick test: Subscription messages
+	@echo "$(GREEN)Testing subscriptions...$(NC)"
+	@bash tests/integration/02_subscriptions.sh
+
+test-ws-throttle: ## Quick test: Throttling/period
+	@echo "$(GREEN)Testing throttling...$(NC)"
+	@bash tests/integration/03_throttling.sh
+
+test-ws-paths: ## Quick test: Path patterns
+	@echo "$(GREEN)Testing path patterns...$(NC)"
+	@bash tests/integration/04_path_subscriptions.sh
+
+test-ws-delta: ## Quick test: Sending deltas
+	@echo "$(GREEN)Testing delta sending...$(NC)"
+	@bash tests/integration/05_send_delta.sh
