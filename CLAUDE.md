@@ -75,7 +75,34 @@ make ci                # Run full CI checks (format, lint, test)
 make pre-commit        # Pre-commit checks (fmt + clippy + test-quiet)
 ```
 
-Run a single test:
+### ESP32 Commands
+
+```bash
+make build-esp         # Build dev (3MB partition)
+make build-esp-release # Build release (OTA partitions)
+make run-esp           # Build and flash (dev)
+make run-esp-release   # Build and flash (release)
+make esp-size          # Show binary size dev
+make esp-size-release  # Show binary size release
+```
+
+### WebSocket Integration Tests
+
+Requires a running server and `websocat` + `jq` installed:
+
+```bash
+make test-ws           # Run all WebSocket tests against localhost:4000
+make test-ws-hello     # Test hello message only
+make test-ws-subscribe # Test subscription messages
+make test-ws-throttle  # Test period/throttling
+make test-ws-paths     # Test path patterns
+make test-ws-delta     # Test sending deltas
+
+# Test against ESP32
+make test-ws-esp SIGNALK_HOST=192.168.1.100
+```
+
+Run a single Rust test:
 ```bash
 cargo test -p signalk-server test_hello_message -- --nocapture
 ```
@@ -95,12 +122,16 @@ crates/
 ├── signalk-protocol/    # WebSocket/REST message types
 ├── signalk-server/      # WebSocket server (Tokio runtime)
 ├── signalk-web/         # Admin UI & REST API (Axum framework)
+├── signalk-esp32/       # ESP32-specific HTTP/WebSocket handlers
 ├── signalk-plugins/     # Deno plugin bridge (planned)
 └── signalk-providers/   # NMEA parsers (planned)
 
 bins/
 ├── signalk-server-linux/  # Full Linux binary (port 4000)
-└── signalk-server-esp32/  # ESP32 binary (planned)
+└── signalk-server-esp32/  # ESP32 binary (port 80)
+
+tests/
+└── integration/         # WebSocket integration tests (shell scripts using websocat)
 ```
 
 ### Key Design Principles
@@ -144,7 +175,9 @@ Single Axum server on port 4000 handles:
 
 ## Testing
 
-Integration tests are in `signalk-server/tests/integration_test.rs` with 27 test cases covering WebSocket connections, subscription filtering, multi-client handling, and delta broadcasting.
+### Rust Integration Tests
+
+Located in `crates/signalk-server/tests/integration_test.rs` with 27 test cases covering WebSocket connections, subscription filtering, multi-client handling, and delta broadcasting.
 
 Test pattern:
 ```rust
@@ -155,25 +188,53 @@ ws.close(None).await.ok();
 handle.abort();
 ```
 
+### WebSocket Integration Tests (Shell Scripts)
+
+Located in `tests/integration/` - shell scripts using `websocat` to test both Linux and ESP32 servers:
+
+| Script | Tests |
+|--------|-------|
+| `00_rest_api.sh` | Discovery endpoint, REST API, path queries |
+| `01_hello.sh` | Hello message format, self URN, timestamp |
+| `02_subscriptions.sh` | Subscribe/unsubscribe via WebSocket messages |
+| `03_throttling.sh` | Period and minPeriod rate limiting |
+| `04_path_subscriptions.sh` | Wildcard patterns, context filtering |
+| `05_send_delta.sh` | Sending deltas to server, PUT requests |
+
+Run with `make test-ws` (requires running server).
+
 ## Current Implementation Status
 
-### Working Features
+### Working Features (Linux)
 - [x] WebSocket server with hello message (correct `self` format with `vessels.` prefix)
 - [x] Delta broadcasting to connected clients
 - [x] REST API `/signalk/v1/api` returning full data model
+- [x] REST API path queries `/signalk/v1/api/vessels/self/navigation/*`
 - [x] Discovery endpoint `/signalk`
 - [x] Admin UI static file serving
 - [x] Server events for Dashboard (`serverevents=all`)
 - [x] Demo data generator for testing
 - [x] Statistics collection and broadcasting
+- [x] Subscription filtering via WebSocket messages (subscribe/unsubscribe)
+- [x] Throttling support (period, minPeriod parameters)
+- [x] Path pattern matching with wildcards (`navigation.*`, `propulsion.*.revolutions`)
+
+### Working Features (ESP32)
+- [x] WebSocket server with hello message
+- [x] Delta broadcasting to connected clients
+- [x] REST API `/signalk/v1/api` returning full data model
+- [x] Discovery endpoint `/signalk`
+- [x] Demo data generator
+- [x] Subscription filtering via WebSocket messages
+- [x] Throttling support
+- [x] Simple glob pattern matching (no regex - optimized for memory)
 
 ### In Progress
-- [ ] Subscription filtering (subscribe/unsubscribe messages)
-- [ ] sendCachedValues on connect
+- [ ] sendCachedValues on connect (needs streaming for ESP32 memory constraints)
 
 ### Planned
 - [ ] NMEA data providers
-- [ ] Deno plugin bridge
+- [ ] Deno plugin bridge (Linux only)
 - [ ] Security/authentication
 - [ ] Full REST API compatibility
 
@@ -181,5 +242,6 @@ handle.abort();
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed architecture and crate responsibilities
 - [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) - SignalK spec details, phase roadmap, API requirements
-- [docs/ESP32_MODULARITY.md](docs/ESP32_MODULARITY.md) - ESP32 deployment strategy
+- [docs/ESP32_MODULARITY.md](docs/ESP32_MODULARITY.md) - ESP32 deployment strategy and code sharing
+- [docs/ESP32_MEMORY.md](docs/ESP32_MEMORY.md) - ESP32 memory constraints, heap/flash optimization
 - [docs/ESP32_WEB_UI_ANALYSIS.md](docs/ESP32_WEB_UI_ANALYSIS.md) - Admin UI size analysis for embedded

@@ -77,9 +77,35 @@ make watch          # Watch for changes and rebuild
 make watch-run      # Watch and restart server on changes
 ```
 
+## Integration Testing
+
+WebSocket integration tests use `websocat` and `jq`. Install with:
+```bash
+cargo install websocat
+apt install jq  # or: brew install jq
+```
+
+Run tests against a running server:
+```bash
+make run &                  # Start server in background
+make test-ws                # Run all WebSocket tests
+
+# Or test against ESP32
+make test-ws-esp SIGNALK_HOST=192.168.1.100
+```
+
 ## Status
 
-🚧 **Early Development** - See [docs/RESEARCH_PLAN.md](docs/RESEARCH_PLAN.md) for roadmap.
+🚧 **Early Development** - See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for roadmap.
+
+### Current Features
+- WebSocket server with SignalK v1.7.0 hello message
+- Delta broadcasting with subscription filtering
+- Throttling support (period/minPeriod)
+- REST API for full model and path queries
+- Discovery endpoint
+- Demo data generator
+- **Both Linux and ESP32 targets working**
 
 ## License
 
